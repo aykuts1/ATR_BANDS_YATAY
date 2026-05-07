@@ -1,0 +1,192 @@
+"""
+Teknik İndikatörler
+ATR, ADX, RSI, KDJ hesaplamaları
+"""
+import pandas as pd
+import numpy as np
+
+
+def calculate_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    """
+    Average True Range
+    True Range = max(high-low, |high-prev_close|, |low-prev_close|)
+    ATR = TR'nin Wilder's smoothing ile ortalaması
+    """
+    high = df["high"]
+    low = df["low"]
+    close = df["close"]
+    prev_close = close.shift(1)
+
+    tr1 = high - low
+    tr2 = (high - prev_close).abs()
+    tr3 = (low - prev_close).abs()
+
+    true_range = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+
+    # Wilder's smoothing (RMA)
+    atr = true_range.ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
+    return atr
+
+
+def calculate_atr_percent(df: pd.DataFrame, period: int = 14) -> float:
+    """ATR% = (ATR / Fiyat) × 100"""
+    atr = calculate_atr(df, period)
+    last_atr = atr.iloc[-1]
+    last_price = df["close"].iloc[-1]
+    if last_price == 0 or pd.isna(last_atr):
+        return 0.0
+    return (last_atr / last_price) * 100
+
+
+def calculate_adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    """
+    Average Directional Index
+    Wilder's metodu ile hesaplanır
+    """
+    high = df["high"]
+    low = df["low"]
+    close = df["close"]
+
+    # +DM, -DM
+    up_move = high.diff()
+    down_move = -low.diff()
+
+    plus_dm = pd.Series(np.where((up_move > down_move) & (up_move > 0), up_move, 0.0), index=df.index)
+    minus_dm = pd.Series(np.where((down_move > up_move) & (down_move > 0), down_move, 0.0), index=df.index)
+
+    # True Range
+    prev_close = close.shift(1)
+    tr1 = high - low
+    tr2 = (high - prev_close).abs()
+    tr3 = (low - prev_close).abs()
+    true_range = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+
+    # Wilder's smoothing
+    atr = true_range.ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
+    plus_dm_s = plus_dm.ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
+    minus_dm_s = minus_dm.ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
+
+    # +DI, -DI
+    plus_di = 100 * (plus_dm_s / atr)
+    minus_di = 100 * (minus_dm_s / atr)
+
+    # DX
+    dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan)
+
+    # ADX
+    adx = dx.ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
+    return adx
+
+
+def calculate_rsi(series: pd.Series, period: int = 14) -> pd.Series:
+    """RSI - Wilder's smoothing"""
+    delta = series.diff()
+    gain = delta.where(delta > 0, 0.0)
+    loss = -delta.where(delta < 0, 0.0)
+
+    avg_gain = gain.ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
+    avg_loss = loss.ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
+
+    rs = avg_gain / avg_loss.replace(0, np.nan)
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
+
+
+def calculate_kdj(df: pd.DataFrame, period: int = 9, k_period: int = 3, d_period: int = 3):
+    """
+    KDJ İndikatörü (9, 3, 3)
+    K = SMA of RSV
+    D = SMA of K
+    J = 3*K - 2*D
+    """
+    high = df["high"]
+    low = df["low"]
+    close = df["close"]
+
+    lowest_low = low.rolling(window=period, min_periods=period).min()
+    highest_high = high.rolling(window=period, min_periods=period).max()
+
+    # RSV (Raw Stochastic Value)
+    rsv = 100 * (close - lowest_low) / (highest_high - lowest_low).replace(0, np.nan)
+
+    # K, D - Bybit/TradingView genellikle SMA değil, EMA-tipi (alpha=1/3) kullanır
+    # Ancak klasik KDJ formülü SMA kullanır. Burada klasik kullanıyoruz.
+    k = rsv.ewm(alpha=1 / k_period, adjust=False, min_periods=k_period).mean()
+    d = k.ewm(alpha=1 / d_period, adjust=False, min_periods=d_period).mean()
+    j = 3 * k - 2 * d
+
+    return k, d, j
+
+
+def detect_rsi_cross(df: pd.DataFrame, fast: int = 6, slow: int = 14) -> str:
+    """
+    RSI(6) - RSI(14) kesişimi son kapanan mumda
+    Returns: 'long', 'short', or 'none'
+    """
+    rsi_fast = calculate_rsi(df["close"], fast)
+    rsi_slow = calculate_rsi(df["close"], slow)
+
+    if len(rsi_fast) < 2 or len(rsi_slow) < 2:
+        return "none"
+
+    fast_curr = rsi_fast.iloc[-1]
+    fast_prev = rsi_fast.iloc[-2]
+    slow_curr = rsi_slow.iloc[-1]
+    slow_prev = rsi_slow.iloc[-2]
+
+    if any(pd.isna([fast_curr, fast_prev, slow_curr, slow_prev])):
+        return "none"
+
+    # Yukarı kesişim: önceki mumda fast <= slow, şimdi fast > slow
+    if fast_prev <= slow_prev and fast_curr > slow_curr:
+        return "long"
+    # Aşağı kesişim
+    if fast_prev >= slow_prev and fast_curr < slow_curr:
+        return "short"
+
+    return "none"
+
+
+def detect_kdj_cross(df: pd.DataFrame, period: int = 9, k_p: int = 3, d_p: int = 3) -> str:
+    """
+    KDJ kesişimi: J çizgisi K ve D'yi keser
+    LONG: J, K ve D'yi yukarı keser (J K'nın ve D'nin üstüne çıkar)
+    SHORT: J, K ve D'yi aşağı keser (J K'nın ve D'nin altına iner)
+    Returns: 'long', 'short', or 'none'
+    """
+    k, d, j = calculate_kdj(df, period, k_p, d_p)
+
+    if len(j) < 2:
+        return "none"
+
+    j_curr, j_prev = j.iloc[-1], j.iloc[-2]
+    k_curr, k_prev = k.iloc[-1], k.iloc[-2]
+    d_curr, d_prev = d.iloc[-1], d.iloc[-2]
+
+    if any(pd.isna([j_curr, j_prev, k_curr, k_prev, d_curr, d_prev])):
+        return "none"
+
+    # J yukarı kesti: önceki mumda J hem K'nın hem D'nin altında veya eşit, şimdi her ikisinin de üstünde
+    crossed_up = (j_prev <= k_prev and j_prev <= d_prev) and (j_curr > k_curr and j_curr > d_curr)
+    # J aşağı kesti
+    crossed_down = (j_prev >= k_prev and j_prev >= d_prev) and (j_curr < k_curr and j_curr < d_curr)
+
+    if crossed_up:
+        return "long"
+    if crossed_down:
+        return "short"
+    return "none"
+
+
+def get_atr_value(df: pd.DataFrame, period: int = 14) -> float:
+    """Son ATR değerini döner"""
+    atr = calculate_atr(df, period)
+    val = atr.iloc[-1]
+    return float(val) if not pd.isna(val) else 0.0
+
+
+def get_adx_value(df: pd.DataFrame, period: int = 14) -> float:
+    """Son ADX değerini döner"""
+    adx = calculate_adx(df, period)
+    val = adx.iloc[-1]
+    return float(val) if not pd.isna(val) else 0.0

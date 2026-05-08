@@ -97,3 +97,24 @@ def notify_signal_skipped(symbol: str, reason: str):
     """Opsiyonel: çok fazla mesaj olur, kullanılırsa filtrelenmeli."""
     msg = f"⏭️ {symbol} atlandı: {reason}"
     send_telegram(msg)
+def notify_scan_summary(scanned: list, errors: list):
+    """30 dakikalık tarama özeti."""
+    total = len(scanned)
+    msg = f"📊 <b>Tarama Tamamlandı</b>\n\n"
+    msg += f"Toplam {total} coin tarandı, sinyal bulunamadı.\n\n"
+    
+    # Sebeplere göre grupla
+    reason_groups = {}
+    for sym, reason in scanned:
+        reason_groups.setdefault(reason, []).append(sym)
+    
+    for reason, syms in reason_groups.items():
+        msg += f"<b>{reason}</b>\n"
+        msg += f"  • {', '.join(syms)}\n\n"
+    
+    if errors:
+        msg += f"⚠️ <b>Hatalar:</b>\n"
+        for sym, err in errors:
+            msg += f"  • {sym}: {err}\n"
+    
+    send_telegram(msg)

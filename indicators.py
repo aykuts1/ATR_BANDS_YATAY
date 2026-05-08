@@ -119,24 +119,29 @@ def calculate_kdj(df: pd.DataFrame, period: int = 9, k_period: int = 3, d_period
 
 def detect_rsi_cross(df: pd.DataFrame, fast: int = 6, slow: int = 14) -> str:
     """
-    RSI(6) - RSI(14) kesişimi son kapanan mumda
+    RSI(6) - RSI(14) kesişimi son KAPANAN mumda
+    iloc[-1] = aktif mum (kapanmamış, kullanılmaz)
+    iloc[-2] = son kapanan mum
+    iloc[-3] = bir önceki kapanan mum
     Returns: 'long', 'short', or 'none'
     """
     rsi_fast = calculate_rsi(df["close"], fast)
     rsi_slow = calculate_rsi(df["close"], slow)
 
-    if len(rsi_fast) < 2 or len(rsi_slow) < 2:
+    if len(rsi_fast) < 3 or len(rsi_slow) < 3:
         return "none"
 
-    fast_curr = rsi_fast.iloc[-1]
-    fast_prev = rsi_fast.iloc[-2]
-    slow_curr = rsi_slow.iloc[-1]
-    slow_prev = rsi_slow.iloc[-2]
+    # Son kapanan mum
+    fast_curr = rsi_fast.iloc[-2]
+    slow_curr = rsi_slow.iloc[-2]
+    # Bir önceki kapanan mum
+    fast_prev = rsi_fast.iloc[-3]
+    slow_prev = rsi_slow.iloc[-3]
 
     if any(pd.isna([fast_curr, fast_prev, slow_curr, slow_prev])):
         return "none"
 
-    # Yukarı kesişim: önceki mumda fast <= slow, şimdi fast > slow
+    # Yukarı kesişim: önceki mumda fast <= slow, son kapanan mumda fast > slow
     if fast_prev <= slow_prev and fast_curr > slow_curr:
         return "long"
     # Aşağı kesişim
@@ -149,24 +154,31 @@ def detect_rsi_cross(df: pd.DataFrame, fast: int = 6, slow: int = 14) -> str:
 def detect_kdj_cross(df: pd.DataFrame, period: int = 9, k_p: int = 3, d_p: int = 3) -> str:
     """
     KDJ kesişimi: J çizgisi K çizgisini keser (D görmezden gelinir)
-    LONG: J, K'yı yukarı keser (J önceki mumda K'nın altında veya eşit, şimdi üstünde)
-    SHORT: J, K'yı aşağı keser (J önceki mumda K'nın üstünde veya eşit, şimdi altında)
+    iloc[-1] = aktif mum (kapanmamış, kullanılmaz)
+    iloc[-2] = son kapanan mum
+    iloc[-3] = bir önceki kapanan mum
+    LONG: J, K'yı yukarı keser
+    SHORT: J, K'yı aşağı keser
     Returns: 'long', 'short', or 'none'
     """
     k, d, j = calculate_kdj(df, period, k_p, d_p)
 
-    if len(j) < 2:
+    if len(j) < 3:
         return "none"
 
-    j_curr, j_prev = j.iloc[-1], j.iloc[-2]
-    k_curr, k_prev = k.iloc[-1], k.iloc[-2]
+    # Son kapanan mum
+    j_curr = j.iloc[-2]
+    k_curr = k.iloc[-2]
+    # Bir önceki kapanan mum
+    j_prev = j.iloc[-3]
+    k_prev = k.iloc[-3]
 
     if any(pd.isna([j_curr, j_prev, k_curr, k_prev])):
         return "none"
 
-    # J yukarı kesti: önceki mumda J <= K, şimdi J > K
+    # J yukarı kesti: önceki mumda J <= K, son kapanan mumda J > K
     crossed_up = (j_prev <= k_prev) and (j_curr > k_curr)
-    # J aşağı kesti: önceki mumda J >= K, şimdi J < K
+    # J aşağı kesti: önceki mumda J >= K, son kapanan mumda J < K
     crossed_down = (j_prev >= k_prev) and (j_curr < k_curr)
 
     if crossed_up:

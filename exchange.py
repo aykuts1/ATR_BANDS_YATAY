@@ -20,7 +20,6 @@ class BybitExchange:
             api_key=BYBIT_API_KEY,
             api_secret=BYBIT_API_SECRET,
         )
-        # Symbol bilgilerini cache'le (qty step, min qty, fiyat hassasiyeti)
         self.symbol_info_cache: dict = {}
         self._load_symbol_info()
 
@@ -28,7 +27,6 @@ class BybitExchange:
     # SYMBOL BİLGİSİ
     # ============================================================
     def _load_symbol_info(self):
-        """Tüm linear (USDT perp) sembollerin filtrelerini yükler."""
         try:
             res = self.session.get_instruments_info(category="linear")
             if res.get("retCode") != 0:
@@ -48,18 +46,17 @@ class BybitExchange:
         except Exception as e:
             logger.exception(f"Symbol info yükleme hatası: {e}")
 
-    def round_qty(self, symbol: str, qty: float) -> float:
-        """Miktarı borsanın izin verdiği step'e yuvarlar (aşağı)."""
+    def round_qty(self, symbol: str, qty: float) -> Decimal:
+        """Miktarı borsanın izin verdiği step'e yuvarlar (aşağı). Decimal döner."""
         info = self.symbol_info_cache.get(symbol)
         if not info:
-            return float(qty)
+            return Decimal(str(qty))
         step = info["qty_step"]
         q = Decimal(str(qty))
         rounded = (q // step) * step
-        return float(rounded)
+        return rounded
 
     def round_price(self, symbol: str, price: float) -> float:
-        """Fiyatı tick size'a yuvarlar."""
         info = self.symbol_info_cache.get(symbol)
         if not info:
             return float(price)
@@ -76,13 +73,8 @@ class BybitExchange:
     # MUM VERISI
     # ============================================================
     def get_klines(self, symbol: str, interval: str, limit: int = 200) -> pd.DataFrame:
-        """
-        Mum verisi çeker.
-        interval: '30', '120', '240' (dakika)
-        Returns: DataFrame [open, high, low, close, volume]
-        """
         try:
-            time.sleep(1)  # Rate limit için bekleme
+            time.sleep(1)
             res = self.session.get_kline(
                 category="linear",
                 symbol=symbol,
@@ -94,7 +86,6 @@ class BybitExchange:
                 return pd.DataFrame()
 
             rows = res["result"]["list"]
-            # Bybit en yenisi başta gelir, ters çeviriyoruz
             rows = list(reversed(rows))
 
             df = pd.DataFrame(rows, columns=["timestamp", "open", "high", "low", "close", "volume", "turnover"])
@@ -111,7 +102,6 @@ class BybitExchange:
     # FIYAT
     # ============================================================
     def get_current_price(self, symbol: str) -> float:
-        """Anlık son fiyatı döner."""
         try:
             res = self.session.get_tickers(category="linear", symbol=symbol)
             if res.get("retCode") != 0:
@@ -125,7 +115,6 @@ class BybitExchange:
     # BAKIYE
     # ============================================================
     def get_usdt_balance(self) -> float:
-        """USDT bakiyesini (UNIFIED hesap) döner."""
         try:
             res = self.session.get_wallet_balance(accountType="UNIFIED", coin="USDT")
             if res.get("retCode") != 0:
@@ -134,7 +123,6 @@ class BybitExchange:
             for item in res["result"]["list"]:
                 for coin in item["coin"]:
                     if coin["coin"] == "USDT":
-                        # walletBalance toplam, availableToWithdraw kullanılabilir
                         wb = coin.get("walletBalance", "0")
                         return float(wb) if wb else 0.0
             return 0.0
@@ -146,7 +134,6 @@ class BybitExchange:
     # KALDIRAÇ
     # ============================================================
     def set_leverage(self, symbol: str, leverage: int = LEVERAGE) -> bool:
-        """Sembol için kaldıraç ayarlar."""
         try:
             self.session.set_leverage(
                 category="linear",
@@ -156,7 +143,6 @@ class BybitExchange:
             )
             return True
         except Exception as e:
-            # 110043: leverage not modified — zaten ayarlı, hata değil
             err_str = str(e)
             if "110043" in err_str or "leverage not modified" in err_str.lower():
                 return True
@@ -167,17 +153,16 @@ class BybitExchange:
     # POZISYON AÇMA
     # ============================================================
     def open_position(self, symbol: str, side: str, qty: float, stop_loss_price: float) -> dict:
-        """
-        Market emir ile pozisyon açar ve borsa-tarafı stop loss kurar.
-        side: 'Buy' (long) veya 'Sell' (short)
-        Returns: {'success': bool, 'order_id': str, 'message': str}
-        """
         try:
-            # Kaldıracı ayarla (her seferinde, garanti için)
             self.set_leverage(symbol, LEVERAGE)
 
-            qty_str = str(self.round_qty(symbol, qty))
+            # Decimal ile doğru yuvarlama
+            rounded_qty = self.round_qty(symbol, qty)
+            qty_str = str(rounded_qty)
+
             sl_str = str(self.round_price(symbol, stop_loss_price))
+
+            logger.info(f"{symbol} emir: qty={qty_str}, sl={sl_str}")
 
             res = self.session.place_order(
                 category="linear",
@@ -187,7 +172,7 @@ class BybitExchange:
                 qty=qty_str,
                 stopLoss=sl_str,
                 slTriggerBy="LastPrice",
-                positionIdx=0,  # one-way mode
+                positionIdx=0,
                 reduceOnly=False,
             )
             if res.get("retCode") != 0:
@@ -203,13 +188,9 @@ class BybitExchange:
     # POZISYON KAPATMA
     # ============================================================
     def close_position(self, symbol: str, side: str, qty: float) -> dict:
-        """
-        Market emir ile pozisyonu kapatır (reduceOnly).
-        side: kapatılacak pozisyonun YÖNÜ değil, KARŞIT yön.
-              Long pozisyonu kapatmak için 'Sell', Short için 'Buy'.
-        """
         try:
-            qty_str = str(self.round_qty(symbol, qty))
+            rounded_qty = self.round_qty(symbol, qty)
+            qty_str = str(rounded_qty)
             res = self.session.place_order(
                 category="linear",
                 symbol=symbol,
@@ -230,7 +211,6 @@ class BybitExchange:
     # STOP LOSS GÜNCELLEME (Breakeven)
     # ============================================================
     def update_stop_loss(self, symbol: str, new_sl: float) -> dict:
-        """Açık pozisyonun SL emrini günceller (breakeven için)."""
         try:
             sl_str = str(self.round_price(symbol, new_sl))
             res = self.session.set_trading_stop(
@@ -242,7 +222,6 @@ class BybitExchange:
                 positionIdx=0,
             )
             if res.get("retCode") != 0:
-                # 34040: not modified, sorun değil
                 msg = res.get("retMsg", "")
                 if "not modified" in msg.lower():
                     return {"success": True, "message": "already set"}
@@ -256,7 +235,6 @@ class BybitExchange:
     # AÇIK POZİSYONLAR
     # ============================================================
     def get_open_positions(self) -> list:
-        """Tüm açık pozisyonları döner."""
         try:
             res = self.session.get_positions(category="linear", settleCoin="USDT")
             if res.get("retCode") != 0:
@@ -267,7 +245,7 @@ class BybitExchange:
                 if size > 0:
                     positions.append({
                         "symbol": p["symbol"],
-                        "side": p["side"],  # 'Buy' or 'Sell'
+                        "side": p["side"],
                         "size": size,
                         "entry_price": float(p["avgPrice"]),
                         "unrealized_pnl": float(p.get("unrealisedPnl", 0)),
@@ -278,7 +256,6 @@ class BybitExchange:
             return []
 
     def get_position(self, symbol: str) -> dict | None:
-        """Belirli sembolün açık pozisyonunu döner, yoksa None."""
         for p in self.get_open_positions():
             if p["symbol"] == symbol:
                 return p

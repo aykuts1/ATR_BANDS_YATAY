@@ -73,6 +73,9 @@ def stop_loss_price(side: str, entry: float) -> float:
 # ============================================================
 def scan_for_entries():
     logger.info("=== Giriş taraması başladı ===")
+    scanned = []  # (symbol, reason)
+    errors = []   # (symbol, error)
+    signal_found = False
 
     with state_lock:
         open_positions = exchange.get_open_positions()
@@ -98,9 +101,11 @@ def scan_for_entries():
 
                 if df_30m.empty or df_2h.empty or df_4h.empty:
                     logger.warning(f"{symbol} mum verisi eksik, atlandı")
+                    errors.append((symbol, "Mum verisi eksik"))
                     continue
                 if len(df_30m) < 30:
                     logger.warning(f"{symbol} yetersiz mum sayısı")
+                    errors.append((symbol, "Yetersiz mum"))
                     continue
 
                 current_price = exchange.get_current_price(symbol)
@@ -111,8 +116,10 @@ def scan_for_entries():
                 logger.info(f"{symbol}: signal={result['signal']} reason={result['reason']} details={result['details']}")
 
                 if result["signal"] == "none":
+                    scanned.append((symbol, result["reason"]))
                     continue
 
+                signal_found = True
                 signal_dir = result["signal"]
                 bybit_side = "Buy" if signal_dir == "long" else "Sell"
 
@@ -181,10 +188,13 @@ def scan_for_entries():
 
             except Exception as e:
                 logger.exception(f"{symbol} işlenirken hata: {e}")
-                tg.notify_error(f"{symbol} hata: {e}")
+                errors.append((symbol, str(e)[:50]))
+
+    # Tarama özeti gönder (sinyal bulunmadıysa)
+    if not signal_found:
+        tg.notify_scan_summary(scanned, errors)
 
     logger.info("=== Giriş taraması bitti ===")
-
 
 # ============================================================
 # CIKIS TAKIBI

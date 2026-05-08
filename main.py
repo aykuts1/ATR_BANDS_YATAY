@@ -350,12 +350,19 @@ def main():
     logger.info("=" * 50)
 
     # 1. Bakiye oku
+  balance = 0.0
+for attempt in range(5):
     balance = exchange.get_usdt_balance()
-    if balance <= 0:
-        msg = f"Bakiye okunamadı veya 0: {balance}"
-        logger.error(msg)
-        tg.notify_error(msg)
-        return
+    if balance > 0:
+        break
+    logger.warning(f"Bakiye okunamadı, tekrar deneniyor... ({attempt+1}/5)")
+    time.sleep(3)
+
+if balance <= 0:
+    msg = f"Bakiye okunamadı veya 0: {balance}"
+    logger.error(msg)
+    tg.notify_error(msg)
+    return
 
     INITIAL_BALANCE = balance
     FIXED_STAKE = balance * STAKE_PERCENT / 100

@@ -109,8 +109,7 @@ def calculate_kdj(df: pd.DataFrame, period: int = 9, k_period: int = 3, d_period
     # RSV (Raw Stochastic Value)
     rsv = 100 * (close - lowest_low) / (highest_high - lowest_low).replace(0, np.nan)
 
-    # K, D - Bybit/TradingView genellikle SMA değil, EMA-tipi (alpha=1/3) kullanır
-    # Ancak klasik KDJ formülü SMA kullanır. Burada klasik kullanıyoruz.
+    # K, D
     k = rsv.ewm(alpha=1 / k_period, adjust=False, min_periods=k_period).mean()
     d = k.ewm(alpha=1 / d_period, adjust=False, min_periods=d_period).mean()
     j = 3 * k - 2 * d
@@ -149,9 +148,9 @@ def detect_rsi_cross(df: pd.DataFrame, fast: int = 6, slow: int = 14) -> str:
 
 def detect_kdj_cross(df: pd.DataFrame, period: int = 9, k_p: int = 3, d_p: int = 3) -> str:
     """
-    KDJ kesişimi: J çizgisi K ve D'yi keser
-    LONG: J, K ve D'yi yukarı keser (J K'nın ve D'nin üstüne çıkar)
-    SHORT: J, K ve D'yi aşağı keser (J K'nın ve D'nin altına iner)
+    KDJ kesişimi: J çizgisi K çizgisini keser (D görmezden gelinir)
+    LONG: J, K'yı yukarı keser (J önceki mumda K'nın altında veya eşit, şimdi üstünde)
+    SHORT: J, K'yı aşağı keser (J önceki mumda K'nın üstünde veya eşit, şimdi altında)
     Returns: 'long', 'short', or 'none'
     """
     k, d, j = calculate_kdj(df, period, k_p, d_p)
@@ -161,15 +160,14 @@ def detect_kdj_cross(df: pd.DataFrame, period: int = 9, k_p: int = 3, d_p: int =
 
     j_curr, j_prev = j.iloc[-1], j.iloc[-2]
     k_curr, k_prev = k.iloc[-1], k.iloc[-2]
-    d_curr, d_prev = d.iloc[-1], d.iloc[-2]
 
-    if any(pd.isna([j_curr, j_prev, k_curr, k_prev, d_curr, d_prev])):
+    if any(pd.isna([j_curr, j_prev, k_curr, k_prev])):
         return "none"
 
-    # J yukarı kesti: önceki mumda J hem K'nın hem D'nin altında veya eşit, şimdi her ikisinin de üstünde
-    crossed_up = (j_prev <= k_prev and j_prev <= d_prev) and (j_curr > k_curr and j_curr > d_curr)
-    # J aşağı kesti
-    crossed_down = (j_prev >= k_prev and j_prev >= d_prev) and (j_curr < k_curr and j_curr < d_curr)
+    # J yukarı kesti: önceki mumda J <= K, şimdi J > K
+    crossed_up = (j_prev <= k_prev) and (j_curr > k_curr)
+    # J aşağı kesti: önceki mumda J >= K, şimdi J < K
+    crossed_down = (j_prev >= k_prev) and (j_curr < k_curr)
 
     if crossed_up:
         return "long"

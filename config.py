@@ -25,7 +25,7 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 # ============================================================
 SYMBOLS = [
     "SOLUSDT", "XRPUSDT", "DOGEUSDT", "TRXUSDT", "LTCUSDT",
-    "ADAUSDT", "LINKUSDT", "AVAXUSDT", "1000SHIBUSDT", "SUIUSDT",
+    "ADAUSDT", "LINKUSDT", "AVAXUSDT", "SUIUSDT",
     "1000PEPEUSDT", "TONUSDT", "NEARUSDT", "APTUSDT", "INJUSDT",
 ]
 

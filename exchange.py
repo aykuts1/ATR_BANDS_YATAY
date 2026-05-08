@@ -82,7 +82,7 @@ class BybitExchange:
         Returns: DataFrame [open, high, low, close, volume]
         """
         try:
-            time.sleep(0.5)  # Rate limit için bekleme
+            time.sleep(1)  # Rate limit için bekleme
             res = self.session.get_kline(
                 category="linear",
                 symbol=symbol,

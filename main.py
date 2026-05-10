@@ -228,8 +228,10 @@ def track_open_positions():
                         pnl_usdt = (pos.entry_price - last_price) * pos.qty
                     pnl_pct = position_manager.calculate_pnl_pct(pos.side, pos.entry_price, last_price)
 
-                    reason = "Borsa SL tetiklendi (1.5 ATR)" if not pos.breakeven_active \
-                        else "Borsa SL tetiklendi (Breakeven)"
+                    if pos.sl_locked:
+                        reason = "Borsa SL tetiklendi (+0.1 ATR kâr kilidi)"
+                    else:
+                        reason = "Borsa SL tetiklendi (-1.5 ATR)"
 
                     tg.notify_position_closed(
                         symbol=sym, side=pos.side,
@@ -255,16 +257,19 @@ def track_open_positions():
 
             # Olayları işle
             for event in result.get("events", []):
-                if event == "breakeven_and_ce":
-                    sl_update = exchange.update_stop_loss(symbol, pos.entry_price)
+                if event == "sl_lock_and_ce":
+                    new_sl = result.get("new_sl", pos.locked_sl_price)
+                    sl_update = exchange.update_stop_loss(symbol, new_sl)
                     if sl_update["success"]:
-                        tg.notify_breakeven_and_ce(symbol, pos.entry_price, result["ce_price"])
-                        logger.info(f"{symbol} breakeven aktif")
+                        tg.notify_sl_lock_and_ce(symbol, new_sl, result["ce_price"])
+                        logger.info(f"{symbol} kâr kilidi aktif (SL: {new_sl:.6f})")
                     else:
-                        logger.error(f"{symbol} breakeven güncellenemedi: {sl_update['message']}")
-                        tg.notify_error(f"{symbol} breakeven güncellenemedi: {sl_update['message']}")
+                        logger.error(f"{symbol} SL güncellenemedi: {sl_update['message']}")
+                        tg.notify_error(f"{symbol} SL güncellenemedi: {sl_update['message']}")
+                elif event == "ce_mid_tightened":
+                    tg.notify_ce_tightened(symbol, result["ce_price"], 0.75)
                 elif event == "ce_tightened":
-                    tg.notify_ce_tightened(symbol, result["ce_price"])
+                    tg.notify_ce_tightened(symbol, result["ce_price"], 0.5)
 
             # Aksiyon: kapatma
             if result["action"] == "close":

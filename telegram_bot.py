@@ -39,8 +39,10 @@ def notify_bot_started(balance: float, stake: float, testnet: bool):
         f"🤖 <b>Bot Başlatıldı</b> [{mode}]\n\n"
         f"💰 Bakiye: <b>{balance:.2f} USDT</b>\n"
         f"📊 Stake (her işlem): <b>{stake:.2f} USDT</b>\n"
-        f"⚡ Kaldıraç: 10x | SL: 1.5 ATR | Max 5 işlem\n"
-        f"🕯️ CE: 1 ATR kârda aktif, 2 ATR'de 0.5 ATR'ye sıkışır"
+        f"⚡ Kaldıraç: 10x | Borsa SL: -1.5 ATR | Max 5 işlem\n"
+        f"🔒 Kâr ≥ 0.5 ATR: SL → +0.1 ATR + CE 1.0 ATR\n"
+        f"🎯 Kâr ≥ 1.5 ATR: CE → 0.75 ATR\n"
+        f"💎 Kâr ≥ 2.0 ATR: CE → 0.5 ATR (son durak)"
     )
     send_telegram(msg)
 
@@ -51,27 +53,38 @@ def notify_position_opened(symbol: str, side: str, entry: float, qty: float, sl:
         f"{arrow} <b>{symbol}</b> AÇILDI\n\n"
         f"📍 Giriş: <code>{entry:.6f}</code>\n"
         f"📦 Miktar: <code>{qty}</code>\n"
-        f"🛡️ Borsa SL: <code>{sl:.6f}</code> (1.5 ATR)\n"
+        f"🛡️ Borsa SL: <code>{sl:.6f}</code> (-1.5 ATR)\n"
         f"📏 ATR: <code>{atr:.6f}</code>\n"
-        f"🕯️ CE: Pasif (kâr 1 ATR'yi geçince aktif olur)"
+        f"🕯️ CE: Pasif (kâr 0.5 ATR'yi geçince aktif olur)"
     )
     send_telegram(msg)
 
 
-def notify_breakeven_and_ce(symbol: str, entry: float, ce_price: float):
+def notify_sl_lock_and_ce(symbol: str, sl_price: float, ce_price: float):
+    """Birinci eşik: kâr ≥ 0.5 ATR → SL +0.1 ATR'ye çekilir + CE aktif"""
     msg = (
-        f"🔒 <b>{symbol}</b> Breakeven + CE Aktif\n\n"
-        f"📍 Borsa SL → Giriş ({entry:.6f})\n"
-        f"🕯️ CE: <code>{ce_price:.6f}</code> (1 ATR geriden takip)"
+        f"🔒 <b>{symbol}</b> Kâr Kilidi + CE Aktif\n\n"
+        f"📍 Borsa SL → <code>{sl_price:.6f}</code> (+0.1 ATR — kâr garantili)\n"
+        f"🕯️ CE: <code>{ce_price:.6f}</code> (1.0 ATR geriden takip)"
     )
     send_telegram(msg)
 
 
-def notify_ce_tightened(symbol: str, ce_price: float):
+def notify_ce_tightened(symbol: str, ce_price: float, trail_atr: float):
+    """İkinci/üçüncü eşik: CE sıkışma bildirimi"""
+    if trail_atr <= 0.5:
+        title = "CE Son Sıkışma (0.5 ATR)"
+        emoji = "💎"
+        note = "Son durak — kâr kilidi sıkı"
+    else:
+        title = f"CE Orta Sıkışma ({trail_atr} ATR)"
+        emoji = "🎯"
+        note = "Kâr kilidi devrede"
+
     msg = (
-        f"🎯 <b>{symbol}</b> CE Sıkıştı\n\n"
-        f"🕯️ CE: <code>{ce_price:.6f}</code> (0.5 ATR geri)\n"
-        f"💎 Kâr kilidi devrede"
+        f"{emoji} <b>{symbol}</b> {title}\n\n"
+        f"🕯️ CE: <code>{ce_price:.6f}</code> ({trail_atr} ATR geri)\n"
+        f"💼 {note}"
     )
     send_telegram(msg)
 

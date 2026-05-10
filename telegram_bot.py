@@ -1,17 +1,18 @@
 """
 Telegram Bildirimleri
 """
+
 import logging
 import requests
+
 from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
 
 logger = logging.getLogger(__name__)
 
 
 def send_telegram(message: str) -> bool:
-    """Telegram'a mesaj gönderir."""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        logger.warning("Telegram ayarları eksik, mesaj gönderilmedi")
+        logger.warning("Telegram ayarları eksik")
         return False
 
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -38,24 +39,45 @@ def notify_bot_started(balance: float, stake: float, testnet: bool):
         f"🤖 <b>Bot Başlatıldı</b> [{mode}]\n\n"
         f"💰 Bakiye: <b>{balance:.2f} USDT</b>\n"
         f"📊 Stake (her işlem): <b>{stake:.2f} USDT</b>\n"
-        f"⚡ Kaldıraç: 5x | SL: %3 | Max 5 işlem"
+        f"⚡ Kaldıraç: 10x | SL: 1.5 ATR | Max 5 işlem\n"
+        f"🕯️ CE: 1 ATR kârda aktif, 2 ATR'de 0.5 ATR'ye sıkışır"
     )
     send_telegram(msg)
 
 
-def notify_position_opened(symbol: str, side: str, entry: float, qty: float, sl: float, ce: float):
+def notify_position_opened(symbol: str, side: str, entry: float, qty: float, sl: float, atr: float):
     arrow = "🟢 LONG" if side.lower() == "long" else "🔴 SHORT"
     msg = (
         f"{arrow} <b>{symbol}</b> AÇILDI\n\n"
         f"📍 Giriş: <code>{entry:.6f}</code>\n"
         f"📦 Miktar: <code>{qty}</code>\n"
-        f"🛑 Stop Loss: <code>{sl:.6f}</code>\n"
-        f"🕯️ Chandelier: <code>{ce:.6f}</code>"
+        f"🛡️ Borsa SL: <code>{sl:.6f}</code> (1.5 ATR)\n"
+        f"📏 ATR: <code>{atr:.6f}</code>\n"
+        f"🕯️ CE: Pasif (kâr 1 ATR'yi geçince aktif olur)"
     )
     send_telegram(msg)
 
 
-def notify_position_closed(symbol: str, side: str, entry: float, exit_price: float, pnl_usdt: float, pnl_pct: float, reason: str):
+def notify_breakeven_and_ce(symbol: str, entry: float, ce_price: float):
+    msg = (
+        f"🔒 <b>{symbol}</b> Breakeven + CE Aktif\n\n"
+        f"📍 Borsa SL → Giriş ({entry:.6f})\n"
+        f"🕯️ CE: <code>{ce_price:.6f}</code> (1 ATR geriden takip)"
+    )
+    send_telegram(msg)
+
+
+def notify_ce_tightened(symbol: str, ce_price: float):
+    msg = (
+        f"🎯 <b>{symbol}</b> CE Sıkıştı\n\n"
+        f"🕯️ CE: <code>{ce_price:.6f}</code> (0.5 ATR geri)\n"
+        f"💎 Kâr kilidi devrede"
+    )
+    send_telegram(msg)
+
+
+def notify_position_closed(symbol: str, side: str, entry: float, exit_price: float,
+                            pnl_usdt: float, pnl_pct: float, reason: str):
     emoji = "✅" if pnl_usdt >= 0 else "❌"
     msg = (
         f"{emoji} <b>{symbol}</b> KAPANDI ({side.upper()})\n\n"
@@ -64,16 +86,6 @@ def notify_position_closed(symbol: str, side: str, entry: float, exit_price: flo
         f"💵 PnL: <b>{pnl_usdt:+.2f} USDT</b> ({pnl_pct:+.2f}%)\n"
         f"📝 Sebep: {reason}"
     )
-    send_telegram(msg)
-
-
-def notify_breakeven(symbol: str, entry: float):
-    msg = f"🔒 <b>{symbol}</b> Breakeven aktifleşti\nSL → Giriş ({entry:.6f})"
-    send_telegram(msg)
-
-
-def notify_ce_update(symbol: str, ce_price: float, atr_mult: float):
-    msg = f"🕯️ <b>{symbol}</b> CE güncellendi: <code>{ce_price:.6f}</code> ({atr_mult}× ATR)"
     send_telegram(msg)
 
 
@@ -89,32 +101,57 @@ def notify_insufficient_balance(symbol: str, needed: float, available: float):
 
 
 def notify_error(message: str):
-    msg = f"🚨 <b>HATA</b>\n\n{message}"
+    msg = f"🚨 <b>HATA</b>\n\n{message[:500]}"
     send_telegram(msg)
 
 
-def notify_signal_skipped(symbol: str, reason: str):
-    """Opsiyonel: çok fazla mesaj olur, kullanılırsa filtrelenmeli."""
-    msg = f"⏭️ {symbol} atlandı: {reason}"
-    send_telegram(msg)
-def notify_scan_summary(scanned: list, errors: list):
-    """30 dakikalık tarama özeti."""
-    total = len(scanned)
-    msg = f"📊 <b>Tarama Tamamlandı</b>\n\n"
-    msg += f"Toplam {total} coin tarandı, sinyal bulunamadı.\n\n"
-    
-    # Sebeplere göre grupla
-    reason_groups = {}
-    for sym, reason in scanned:
-        reason_groups.setdefault(reason, []).append(sym)
-    
-    for reason, syms in reason_groups.items():
-        msg += f"<b>{reason}</b>\n"
-        msg += f"  • {', '.join(syms)}\n\n"
-    
+def notify_scan_summary(scanned: list, errors: list, opened: list,
+                         skipped_capacity: list, capacity_full: bool):
+    """Her tarama sonunda gönderilir."""
+    msg = "📊 <b>Tarama Tamamlandı</b>\n\n"
+
+    # Açılan işlemler
+    if opened:
+        msg += "✅ <b>Açılan İşlemler:</b>\n"
+        for sym, side in opened:
+            arrow = "🟢" if side == "long" else "🔴"
+            msg += f"  {arrow} {sym} {side.upper()}\n"
+        msg += "\n"
+
+    # Kapasite dolu, atlanan sinyaller
+    if skipped_capacity:
+        msg += "🚫 <b>Kapasite Dolu — Atlanan Sinyaller:</b>\n"
+        for sym, side in skipped_capacity:
+            arrow = "🟢" if side == "long" else "🔴"
+            msg += f"  {arrow} {sym} {side.upper()}\n"
+        msg += f"  <i>(Mevcut: 5/5 pozisyon dolu)</i>\n\n"
+    elif capacity_full and not opened:
+        msg += "⚠️ <b>Kapasite Dolu (5/5)</b>\n  <i>Hiçbir sinyal gelmedi.</i>\n\n"
+
+    # Sebepler
+    if scanned:
+        if not opened and not skipped_capacity:
+            msg += f"Toplam {len(scanned)} coin tarandı, sinyal yok.\n\n"
+
+        reason_groups = {}
+        for sym, reason in scanned:
+            reason_groups.setdefault(reason, []).append(sym)
+
+        msg += "<b>Tarama Detayı:</b>\n"
+        for reason, syms in reason_groups.items():
+            msg += f"  <i>{reason}</i> ({len(syms)})\n"
+            display = syms[:6]
+            msg += f"   • {', '.join(display)}"
+            if len(syms) > 6:
+                msg += f" +{len(syms)-6} diğer"
+            msg += "\n"
+
+    # Hatalar
     if errors:
-        msg += f"⚠️ <b>Hatalar:</b>\n"
-        for sym, err in errors:
+        msg += "\n⚠️ <b>Hatalar:</b>\n"
+        for sym, err in errors[:5]:
             msg += f"  • {sym}: {err}\n"
-    
+        if len(errors) > 5:
+            msg += f"  • +{len(errors)-5} diğer\n"
+
     send_telegram(msg)

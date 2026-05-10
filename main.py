@@ -3,30 +3,23 @@ Ana Bot Döngüsü
 - Her 30 dakikalık mum kapanışında giriş taraması
 - Her dakika açık pozisyonların CE takibi
 """
+
 import logging
 import time
 import threading
 from datetime import datetime, timezone
 
 from config import (
-    SYMBOLS,
-    TIMEFRAME,
-    MTF_2H,
-    MTF_4H,
-    LEVERAGE,
-    STAKE_PERCENT,
-    STOP_LOSS_PERCENT,
-    MAX_OPEN_POSITIONS,
-    EXIT_CHECK_INTERVAL,
-    BYBIT_TESTNET,
-    LOG_LEVEL,
+    SYMBOLS, TIMEFRAME, MTF_4H,
+    LEVERAGE, STAKE_PERCENT, SL_ATR_MULTIPLIER,
+    MAX_OPEN_POSITIONS, EXIT_CHECK_INTERVAL,
+    BYBIT_TESTNET, LOG_LEVEL, ATR_PERIOD,
 )
 from exchange import BybitExchange
 from filters import evaluate_signal
 from indicators import get_atr_value
 from position_manager import PositionManager
 import telegram_bot as tg
-
 
 # ============================================================
 # LOGGING
@@ -36,7 +29,6 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger("bot")
-
 
 # ============================================================
 # GLOBAL STATE
@@ -52,20 +44,20 @@ FIXED_STAKE = 0.0
 # ============================================================
 # YARDIMCI FONKSIYONLAR
 # ============================================================
-def calculate_position_qty(symbol: str, price: float, stake: float) -> float:
+def calculate_position_qty(price: float, stake: float) -> float:
+    """Stake ve fiyata göre miktar (raw float)."""
     if price <= 0:
         return 0.0
     notional = stake * LEVERAGE
-    qty = notional / price
-    qty = exchange.round_qty(symbol, qty)
-    return qty
+    return notional / price
 
 
-def stop_loss_price(side: str, entry: float) -> float:
+def stop_loss_price_atr(side: str, entry: float, atr: float) -> float:
+    """1.5 ATR uzaklıkta borsa SL fiyatı."""
     if side == "long":
-        return entry * (1 - STOP_LOSS_PERCENT / 100)
+        return entry - (SL_ATR_MULTIPLIER * atr)
     else:
-        return entry * (1 + STOP_LOSS_PERCENT / 100)
+        return entry + (SL_ATR_MULTIPLIER * atr)
 
 
 # ============================================================
@@ -73,98 +65,111 @@ def stop_loss_price(side: str, entry: float) -> float:
 # ============================================================
 def scan_for_entries():
     logger.info("=== Giriş taraması başladı ===")
-    scanned = []  # (symbol, reason)
-    errors = []   # (symbol, error)
-    signal_found = False
+    scanned = []           # (symbol, reason)
+    errors = []            # (symbol, error)
+    opened = []            # (symbol, side)
+    skipped_capacity = []  # (symbol, side) - sinyal var ama kapasite dolu
 
     with state_lock:
-        open_positions = exchange.get_open_positions()
-        sync_positions(open_positions)
+        live_positions = exchange.get_open_positions()
+        sync_positions(live_positions)
 
-        if position_manager.count() >= MAX_OPEN_POSITIONS:
-            logger.info(f"Max pozisyon ({MAX_OPEN_POSITIONS}) doldu, tarama atlandı")
-            return
-
-        current_balance = exchange.get_usdt_balance()
+        capacity_full = position_manager.count() >= MAX_OPEN_POSITIONS
+        current_balance = exchange.get_available_balance()
 
         for symbol in SYMBOLS:
             try:
                 if position_manager.has_position(symbol):
+                    scanned.append((symbol, "Pozisyon zaten açık"))
                     continue
-                if position_manager.count() >= MAX_OPEN_POSITIONS:
-                    logger.info("Max pozisyon doldu, tarama bitti")
-                    break
 
+                # Mum verisi
                 df_30m = exchange.get_klines(symbol, TIMEFRAME, limit=200)
-                df_2h = exchange.get_klines(symbol, MTF_2H, limit=50)
                 df_4h = exchange.get_klines(symbol, MTF_4H, limit=50)
 
-                if df_30m.empty or df_2h.empty or df_4h.empty:
-                    logger.warning(f"{symbol} mum verisi eksik, atlandı")
+                if df_30m.empty or df_4h.empty:
                     errors.append((symbol, "Mum verisi eksik"))
                     continue
+
                 if len(df_30m) < 30:
-                    logger.warning(f"{symbol} yetersiz mum sayısı")
                     errors.append((symbol, "Yetersiz mum"))
                     continue
 
                 current_price = exchange.get_current_price(symbol)
                 if current_price <= 0:
+                    errors.append((symbol, "Fiyat alınamadı"))
                     continue
 
-                result = evaluate_signal(symbol, current_price, df_30m, df_2h, df_4h)
-                logger.info(f"{symbol}: signal={result['signal']} reason={result['reason']} details={result['details']}")
+                # Filtreler
+                result = evaluate_signal(symbol, current_price, df_30m, df_4h)
+                logger.info(f"{symbol}: signal={result['signal']} reason={result['reason']}")
 
                 if result["signal"] == "none":
                     scanned.append((symbol, result["reason"]))
                     continue
 
-                signal_found = True
+                # Sinyal var
                 signal_dir = result["signal"]
                 bybit_side = "Buy" if signal_dir == "long" else "Sell"
 
+                # Kapasite dolu mu?
+                if capacity_full:
+                    skipped_capacity.append((symbol, signal_dir))
+                    logger.warning(f"{symbol} {signal_dir} sinyal var ama kapasite dolu (5/5)")
+                    continue
+
+                # Bakiye kontrolü
                 if current_balance < FIXED_STAKE:
                     tg.notify_insufficient_balance(symbol, FIXED_STAKE, current_balance)
-                    logger.warning(f"{symbol} için yetersiz bakiye: {current_balance:.2f} < {FIXED_STAKE:.2f}")
+                    logger.warning(f"{symbol} yetersiz bakiye: {current_balance:.2f} < {FIXED_STAKE:.2f}")
                     continue
 
-                qty = calculate_position_qty(symbol, current_price, FIXED_STAKE)
+                # ATR ve SL hesabı
+                atr_value = get_atr_value(df_30m, period=ATR_PERIOD)
+                if atr_value <= 0:
+                    atr_value = current_price * 0.01
+
+                sl_price = stop_loss_price_atr(signal_dir, current_price, atr_value)
+
+                # Miktar hesabı
+                raw_qty = calculate_position_qty(current_price, FIXED_STAKE)
                 min_qty = exchange.get_min_qty(symbol)
-                if qty < min_qty:
-                    logger.warning(f"{symbol} qty={qty} < min_qty={min_qty}, atlandı")
+                if raw_qty < min_qty:
+                    errors.append((symbol, f"qty<{min_qty}"))
                     continue
 
-                sl_price = stop_loss_price(signal_dir, current_price)
+                logger.info(f"{symbol} {bybit_side} açılıyor: qty={raw_qty:.6f}, "
+                            f"price={current_price}, SL={sl_price:.6f}, ATR={atr_value:.6f}")
 
-                logger.info(f"{symbol} {bybit_side} açılıyor: qty={qty}, price~{current_price}, SL={sl_price}")
-                order_result = exchange.open_position(symbol, bybit_side, qty, sl_price)
-
+                # Pozisyon aç (Limit IOC)
+                order_result = exchange.open_position(
+                    symbol, bybit_side, raw_qty, sl_price, current_price
+                )
                 if not order_result["success"]:
                     err = f"{symbol} pozisyon açılamadı: {order_result['message']}"
                     logger.error(err)
                     tg.notify_error(err)
+                    errors.append((symbol, "Emir hatası"))
                     continue
 
-                time.sleep(1.5)
+                # Pozisyon doğrulama
+                time.sleep(2)
                 live_pos = exchange.get_position(symbol)
                 if not live_pos:
-                    logger.warning(f"{symbol} pozisyon açıldı ama listede görünmüyor, tekrar deneme...")
                     time.sleep(2)
                     live_pos = exchange.get_position(symbol)
 
                 if not live_pos:
-                    err = f"{symbol} pozisyon açıldı ama doğrulanamadı, manuel kontrol gerek!"
+                    err = f"{symbol} pozisyon açıldı ama doğrulanamadı"
                     logger.error(err)
                     tg.notify_error(err)
+                    errors.append((symbol, "Doğrulanamadı"))
                     continue
 
                 actual_entry = live_pos["entry_price"]
                 actual_qty = live_pos["size"]
 
-                atr_value = get_atr_value(df_30m, period=14)
-                if atr_value <= 0:
-                    atr_value = actual_entry * 0.01
-
+                # Manager'a kaydet
                 position_manager.add_position(
                     symbol=symbol,
                     side=signal_dir,
@@ -174,27 +179,31 @@ def scan_for_entries():
                     atr_value=atr_value,
                 )
 
-                pos = position_manager.get(symbol)
                 tg.notify_position_opened(
-                    symbol=symbol,
-                    side=signal_dir,
-                    entry=actual_entry,
-                    qty=actual_qty,
-                    sl=sl_price,
-                    ce=pos.ce_price,
+                    symbol=symbol, side=signal_dir,
+                    entry=actual_entry, qty=actual_qty,
+                    sl=sl_price, atr=atr_value,
                 )
+                opened.append((symbol, signal_dir))
 
-                current_balance -= FIXED_STAKE / LEVERAGE
+                # Kapasite kontrolünü güncelle
+                if position_manager.count() >= MAX_OPEN_POSITIONS:
+                    capacity_full = True
+
+                current_balance -= FIXED_STAKE
 
             except Exception as e:
                 logger.exception(f"{symbol} işlenirken hata: {e}")
                 errors.append((symbol, str(e)[:50]))
 
-    # Tarama özeti gönder (sinyal bulunmadıysa)
-    if not signal_found:
-        tg.notify_scan_summary(scanned, errors)
+    # Tarama özeti — HER ZAMAN gönderilir
+    try:
+        tg.notify_scan_summary(scanned, errors, opened, skipped_capacity, capacity_full)
+    except Exception as e:
+        logger.exception(f"Tarama özeti gönderilemedi: {e}")
 
     logger.info("=== Giriş taraması bitti ===")
+
 
 # ============================================================
 # CIKIS TAKIBI
@@ -207,25 +216,31 @@ def track_open_positions():
         live_positions = exchange.get_open_positions()
         live_symbols = {p["symbol"] for p in live_positions}
 
+        # Borsa SL tetiklenmiş pozisyonlar
         for sym in list(position_manager.positions.keys()):
             if sym not in live_symbols:
                 pos = position_manager.get(sym)
                 if pos:
                     last_price = exchange.get_current_price(sym)
+                    if pos.side == "long":
+                        pnl_usdt = (last_price - pos.entry_price) * pos.qty
+                    else:
+                        pnl_usdt = (pos.entry_price - last_price) * pos.qty
                     pnl_pct = position_manager.calculate_pnl_pct(pos.side, pos.entry_price, last_price)
-                    pnl_usdt = (pnl_pct / 100) * (pos.qty * pos.entry_price)
+
+                    reason = "Borsa SL tetiklendi (1.5 ATR)" if not pos.breakeven_active \
+                        else "Borsa SL tetiklendi (Breakeven)"
+
                     tg.notify_position_closed(
-                        symbol=sym,
-                        side=pos.side,
-                        entry=pos.entry_price,
-                        exit_price=last_price,
-                        pnl_usdt=pnl_usdt,
-                        pnl_pct=pnl_pct,
-                        reason="Borsa SL tetiklendi",
+                        symbol=sym, side=pos.side,
+                        entry=pos.entry_price, exit_price=last_price,
+                        pnl_usdt=pnl_usdt, pnl_pct=pnl_pct,
+                        reason=reason,
                     )
                     position_manager.remove_position(sym)
                     logger.info(f"{sym} borsada kapanmış, manager'dan silindi")
 
+        # Aktif pozisyonları takip et
         for live_p in live_positions:
             symbol = live_p["symbol"]
             pos = position_manager.get(symbol)
@@ -238,28 +253,34 @@ def track_open_positions():
 
             result = position_manager.update_position(symbol, current_price)
 
-            if result["action"] == "breakeven":
-                sl_update = exchange.update_stop_loss(symbol, pos.entry_price)
-                if sl_update["success"]:
-                    tg.notify_breakeven(symbol, pos.entry_price)
-                    logger.info(f"{symbol} breakeven aktif")
-                else:
-                    logger.error(f"{symbol} breakeven güncellenemedi: {sl_update['message']}")
+            # Olayları işle
+            for event in result.get("events", []):
+                if event == "breakeven_and_ce":
+                    sl_update = exchange.update_stop_loss(symbol, pos.entry_price)
+                    if sl_update["success"]:
+                        tg.notify_breakeven_and_ce(symbol, pos.entry_price, result["ce_price"])
+                        logger.info(f"{symbol} breakeven aktif")
+                    else:
+                        logger.error(f"{symbol} breakeven güncellenemedi: {sl_update['message']}")
+                        tg.notify_error(f"{symbol} breakeven güncellenemedi: {sl_update['message']}")
+                elif event == "ce_tightened":
+                    tg.notify_ce_tightened(symbol, result["ce_price"])
 
-            elif result["action"] == "close":
+            # Aksiyon: kapatma
+            if result["action"] == "close":
                 close_side = "Sell" if pos.side == "long" else "Buy"
-                close_result = exchange.close_position(symbol, close_side, pos.qty)
-
+                close_result = exchange.close_position(symbol, close_side, pos.qty, current_price)
                 if close_result["success"]:
+                    if pos.side == "long":
+                        pnl_usdt = (current_price - pos.entry_price) * pos.qty
+                    else:
+                        pnl_usdt = (pos.entry_price - current_price) * pos.qty
                     pnl_pct = position_manager.calculate_pnl_pct(pos.side, pos.entry_price, current_price)
-                    pnl_usdt = (pnl_pct / 100) * (pos.qty * pos.entry_price)
+
                     tg.notify_position_closed(
-                        symbol=symbol,
-                        side=pos.side,
-                        entry=pos.entry_price,
-                        exit_price=current_price,
-                        pnl_usdt=pnl_usdt,
-                        pnl_pct=pnl_pct,
+                        symbol=symbol, side=pos.side,
+                        entry=pos.entry_price, exit_price=current_price,
+                        pnl_usdt=pnl_usdt, pnl_pct=pnl_pct,
                         reason=result["reason"],
                     )
                     position_manager.remove_position(symbol)
@@ -284,11 +305,10 @@ def sync_positions(live_positions: list):
 def seconds_until_next_30min_close() -> float:
     now = datetime.now(timezone.utc)
     minute = now.minute
-    next_close_minute = 30 if minute < 30 else 60
-    if next_close_minute == 60:
-        seconds = (60 - minute) * 60 - now.second
-    else:
+    if minute < 30:
         seconds = (30 - minute) * 60 - now.second
+    else:
+        seconds = (60 - minute) * 60 - now.second
     return max(seconds, 1)
 
 
@@ -325,13 +345,13 @@ def main():
     logger.info(f"Bot başlatılıyor... TESTNET={BYBIT_TESTNET}")
     logger.info("=" * 50)
 
-    # 1. Bakiye oku
+    # Bakiye oku
     balance = 0.0
     for attempt in range(5):
         balance = exchange.get_usdt_balance()
         if balance > 0:
             break
-        logger.warning(f"Bakiye okunamadı, tekrar deneniyor... ({attempt+1}/5)")
+        logger.warning(f"Bakiye okunamadı, tekrar... ({attempt+1}/5)")
         time.sleep(3)
 
     if balance <= 0:
@@ -342,22 +362,20 @@ def main():
 
     INITIAL_BALANCE = balance
     FIXED_STAKE = balance * STAKE_PERCENT / 100
-
     logger.info(f"Bakiye: {balance:.2f} USDT, Stake: {FIXED_STAKE:.2f} USDT")
     tg.notify_bot_started(balance, FIXED_STAKE, BYBIT_TESTNET)
 
-    # 2. Mevcut açık pozisyonları senkronize et
+    # Senkronizasyon
     open_positions = exchange.get_open_positions()
     sync_positions(open_positions)
     logger.info(f"Senkronizasyon: {len(position_manager.positions)} takipli pozisyon")
 
-    # 3. İki paralel thread
+    # Paralel thread'ler
     t1 = threading.Thread(target=entry_scanner_loop, daemon=True, name="EntryScanner")
     t2 = threading.Thread(target=exit_tracker_loop, daemon=True, name="ExitTracker")
     t1.start()
     t2.start()
 
-    # Ana thread canlı tut
     try:
         while True:
             time.sleep(60)

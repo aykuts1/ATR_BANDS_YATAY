@@ -56,13 +56,21 @@ SL_ATR_MULTIPLIER = 1.5    # Borsa SL: giriş ± (1.5 × ATR)
 MAX_OPEN_POSITIONS = 5
 
 # ============================================================
-# CHANDELIER EXIT (ATR bazlı)
+# CHANDELIER EXIT (ATR bazlı) - 3 KADEMELİ YENİ SİSTEM
 # ============================================================
-BREAKEVEN_TRIGGER_ATR = 1.0    # Kâr ≥ 1 ATR → borsa SL giriş fiyatına çekilir
-CE_ACTIVATION_ATR = 1.0        # Kâr ≥ 1 ATR → CE aktif olur
-CE_INITIAL_TRAIL_ATR = 1.0     # Aktif olunca: 1 ATR geriden takip
-CE_TIGHT_TRIGGER_ATR = 2.0     # Kâr ≥ 2 ATR → CE sıkışır
-CE_TIGHT_TRAIL_ATR = 0.5       # Sıkışınca: 0.5 ATR geriden takip (son durak)
+# Birinci eşik: Kâr ≥ 0.5 ATR
+SL_LOCK_TRIGGER_ATR = 0.5      # Borsa SL +0.1 ATR'ye çekilir + CE aktif olur
+SL_LOCK_OFFSET_ATR = 0.1       # Borsa SL: giriş ± (0.1 × ATR) — kâr kilidi
+CE_ACTIVATION_ATR = 0.5        # CE aktif olur (SL_LOCK_TRIGGER_ATR ile aynı)
+CE_INITIAL_TRAIL_ATR = 1.0     # CE: 1.0 ATR geriden takip
+
+# İkinci eşik: Kâr ≥ 1.5 ATR
+CE_MID_TRIGGER_ATR = 1.5       # CE 0.75 ATR'ye sıkışır
+CE_MID_TRAIL_ATR = 0.75
+
+# Üçüncü eşik: Kâr ≥ 2.0 ATR
+CE_TIGHT_TRIGGER_ATR = 2.0     # CE 0.5 ATR'ye sıkışır (son durak)
+CE_TIGHT_TRAIL_ATR = 0.5
 
 # ============================================================
 # EMİR TİPİ (LIMIT - market gibi davranan)

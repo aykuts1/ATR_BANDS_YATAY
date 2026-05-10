@@ -1,10 +1,13 @@
 """
-Pozisyon Yönetimi
-- Açık pozisyonların kâr durumunu takip eder
-- Chandelier Exit (CE) seviyesini hesaplar (asla geri çekilmez)
-- Breakeven SL'yi tetikler
-- CE'ye fiyat çarptıysa pozisyonu kapatır
+Pozisyon Yönetimi (ATR bazlı)
+
+- Borsa SL: 1.5 ATR uzakta (giriş anında)
+- Kâr ≥ 1 ATR → Borsa SL giriş fiyatına çekilir + CE aktif olur (1 ATR trail)
+- Kâr ≥ 2 ATR → CE 0.5 ATR trail'e sıkışır (kâr kilidi)
+- CE asla geri çekilmez
+- CE'ye fiyat çarptıysa bot pozisyonu kapatır
 """
+
 import logging
 import json
 import os
@@ -13,11 +16,11 @@ from dataclasses import dataclass, field, asdict
 from typing import Optional
 
 from config import (
-    BREAKEVEN_TRIGGER_PCT,
-    CE_INITIAL_ATR,
-    CE_AT_2PCT,
-    CE_AT_3PCT,
-    CE_AT_4PCT,
+    BREAKEVEN_TRIGGER_ATR,
+    CE_ACTIVATION_ATR,
+    CE_INITIAL_TRAIL_ATR,
+    CE_TIGHT_TRIGGER_ATR,
+    CE_TIGHT_TRAIL_ATR,
 )
 
 logger = logging.getLogger(__name__)
@@ -28,16 +31,17 @@ POSITIONS_FILE = "positions_state.json"
 @dataclass
 class TrackedPosition:
     symbol: str
-    side: str  # 'long' veya 'short'
+    side: str               # 'long' veya 'short'
     entry_price: float
     qty: float
-    initial_sl: float
-    atr_at_entry: float
-    ce_price: float            # Mevcut CE seviyesi (kilitlenmiş)
-    highest_price: float       # LONG için en yüksek nokta
-    lowest_price: float        # SHORT için en düşük nokta
-    breakeven_active: bool = False
-    current_atr_mult: float = field(default=CE_INITIAL_ATR)
+    initial_sl: float       # Borsa'ya verilen ilk SL (1.5 ATR)
+    atr_at_entry: float     # Giriş anındaki ATR
+    breakeven_active: bool = False  # Borsa SL giriş fiyatına çekildi mi
+    ce_active: bool = False         # CE aktif mi (kâr 1 ATR'yi geçti mi)
+    ce_price: float = 0.0           # Mevcut CE seviyesi (kilitlenmiş)
+    ce_trail_atr: float = 1.0       # CE'nin kaç ATR geriden takip ettiği
+    highest_price: float = 0.0
+    lowest_price: float = 0.0
     opened_at: float = field(default_factory=time.time)
 
 
@@ -74,15 +78,6 @@ class PositionManager:
     # ============================================================
     def add_position(self, symbol: str, side: str, entry_price: float, qty: float,
                      initial_sl: float, atr_value: float):
-        if side.lower() == "long":
-            ce_price = entry_price - (CE_INITIAL_ATR * atr_value)
-            highest = entry_price
-            lowest = entry_price
-        else:
-            ce_price = entry_price + (CE_INITIAL_ATR * atr_value)
-            highest = entry_price
-            lowest = entry_price
-
         pos = TrackedPosition(
             symbol=symbol,
             side=side.lower(),
@@ -90,15 +85,16 @@ class PositionManager:
             qty=qty,
             initial_sl=initial_sl,
             atr_at_entry=atr_value,
-            ce_price=ce_price,
-            highest_price=highest,
-            lowest_price=lowest,
             breakeven_active=False,
-            current_atr_mult=CE_INITIAL_ATR,
+            ce_active=False,
+            ce_price=0.0,
+            ce_trail_atr=CE_INITIAL_TRAIL_ATR,
+            highest_price=entry_price,
+            lowest_price=entry_price,
         )
         self.positions[symbol] = pos
         self._save_state()
-        logger.info(f"Pozisyon eklendi: {symbol} {side} entry={entry_price} CE={ce_price}")
+        logger.info(f"Pozisyon eklendi: {symbol} {side} entry={entry_price} ATR={atr_value}")
 
     def remove_position(self, symbol: str):
         if symbol in self.positions:
@@ -124,37 +120,39 @@ class PositionManager:
             return 0.0
         if side == "long":
             return ((current - entry) / entry) * 100
-        else:  # short
+        else:
             return ((entry - current) / entry) * 100
 
-    # ============================================================
-    # CE GUNCELLEME MANTIGI
-    # ============================================================
-    def _get_ce_atr_mult(self, pnl_pct: float) -> float:
-        """Kâr seviyesine göre CE ATR çarpanını döner."""
-        if pnl_pct >= 4.0:
-            return CE_AT_4PCT
-        if pnl_pct >= 3.0:
-            return CE_AT_3PCT
-        if pnl_pct >= 2.0:
-            return CE_AT_2PCT
-        return CE_INITIAL_ATR
+    @staticmethod
+    def calculate_pnl_atr(side: str, entry: float, current: float, atr: float) -> float:
+        """Kâr/zararı ATR cinsinden döner."""
+        if atr == 0:
+            return 0.0
+        if side == "long":
+            return (current - entry) / atr
+        else:
+            return (entry - current) / atr
 
+    # ============================================================
+    # POZISYON GÜNCELLEME (her 60 saniyede çağrılır)
+    # ============================================================
     def update_position(self, symbol: str, current_price: float) -> dict:
         """
-        Her dakika çağrılır.
         Returns: {
-            'action': 'none' | 'breakeven' | 'close',
-            'reason': str,
-            'new_sl': float (breakeven ise),
+            'action': 'none' | 'close',
+            'events': ['breakeven_and_ce', 'ce_tightened'],
+            'reason': str (close ise),
             'ce_price': float,
+            'pnl_atr': float,
         }
         """
         pos = self.positions.get(symbol)
         if not pos:
-            return {"action": "none", "reason": "no position"}
+            return {"action": "none", "events": []}
 
-        # En yüksek/düşük noktayı güncelle
+        events = []
+
+        # 1. Highest/lowest güncelle
         if pos.side == "long":
             if current_price > pos.highest_price:
                 pos.highest_price = current_price
@@ -162,54 +160,70 @@ class PositionManager:
             if current_price < pos.lowest_price:
                 pos.lowest_price = current_price
 
-        # Kâr yüzdesi
-        pnl_pct = self.calculate_pnl_pct(pos.side, pos.entry_price, current_price)
+        pnl_atr = self.calculate_pnl_atr(pos.side, pos.entry_price, current_price, pos.atr_at_entry)
 
-        # 1) BREAKEVEN tetiklendi mi?
-        if not pos.breakeven_active and pnl_pct >= BREAKEVEN_TRIGGER_PCT:
+        # 2. Breakeven + CE aktivasyonu (Kâr ≥ 1 ATR)
+        if not pos.breakeven_active and pnl_atr >= BREAKEVEN_TRIGGER_ATR:
             pos.breakeven_active = True
+            pos.ce_active = True
+            pos.ce_trail_atr = CE_INITIAL_TRAIL_ATR  # 1.0
+            if pos.side == "long":
+                pos.ce_price = pos.highest_price - (CE_INITIAL_TRAIL_ATR * pos.atr_at_entry)
+            else:
+                pos.ce_price = pos.lowest_price + (CE_INITIAL_TRAIL_ATR * pos.atr_at_entry)
+            events.append("breakeven_and_ce")
+            logger.info(f"{symbol} breakeven + CE aktif (PnL: {pnl_atr:.2f} ATR, CE: {pos.ce_price})")
+
+        # CE aktif değilse devam etme
+        if not pos.ce_active:
             self._save_state()
-            return {
-                "action": "breakeven",
-                "reason": f"Kâr +{pnl_pct:.2f}%, SL → giriş fiyatına",
-                "new_sl": pos.entry_price,
-                "ce_price": pos.ce_price,
-            }
+            return {"action": "none", "events": events, "pnl_atr": pnl_atr}
 
-        # 2) CE seviyesini güncelle
-        # Yeni ATR çarpanı
-        new_mult = self._get_ce_atr_mult(pnl_pct)
-        if new_mult < pos.current_atr_mult:
-            pos.current_atr_mult = new_mult
+        # 3. CE sıkışma (Kâr ≥ 2 ATR → 0.5 ATR trail)
+        if pos.ce_trail_atr > CE_TIGHT_TRAIL_ATR and pnl_atr >= CE_TIGHT_TRIGGER_ATR:
+            pos.ce_trail_atr = CE_TIGHT_TRAIL_ATR  # 0.5
+            # CE'yi yeni trail ile yeniden hesapla
+            if pos.side == "long":
+                new_ce = pos.highest_price - (CE_TIGHT_TRAIL_ATR * pos.atr_at_entry)
+                if new_ce > pos.ce_price:
+                    pos.ce_price = new_ce
+            else:
+                new_ce = pos.lowest_price + (CE_TIGHT_TRAIL_ATR * pos.atr_at_entry)
+                if new_ce < pos.ce_price:
+                    pos.ce_price = new_ce
+            events.append("ce_tightened")
+            logger.info(f"{symbol} CE sıkıştı (0.5 ATR trail), CE: {pos.ce_price}")
 
-        # CE'yi en yüksek/düşük noktaya göre hesapla
+        # 4. CE seviyesini takip et (asla geri çekilmez)
         if pos.side == "long":
-            new_ce = pos.highest_price - (pos.current_atr_mult * pos.atr_at_entry)
-            # CE asla geri çekilmez (yukarı gidebilir, aşağı inemez)
+            new_ce = pos.highest_price - (pos.ce_trail_atr * pos.atr_at_entry)
             if new_ce > pos.ce_price:
                 pos.ce_price = new_ce
-                self._save_state()
         else:
-            new_ce = pos.lowest_price + (pos.current_atr_mult * pos.atr_at_entry)
-            # SHORT'ta CE asla yukarı çekilmez (aşağı gidebilir, yukarı çıkamaz)
+            new_ce = pos.lowest_price + (pos.ce_trail_atr * pos.atr_at_entry)
             if new_ce < pos.ce_price:
                 pos.ce_price = new_ce
-                self._save_state()
 
-        # 3) Fiyat CE'ye çarptı mı?
+        self._save_state()
+
+        # 5. CE tetiklendi mi?
         if pos.side == "long":
             if current_price <= pos.ce_price:
                 return {
                     "action": "close",
-                    "reason": f"CE tetiklendi @ {pos.ce_price:.6f} (kâr %{pnl_pct:.2f})",
+                    "events": events,
+                    "reason": f"CE tetiklendi ({pos.ce_trail_atr} ATR geri, kâr {pnl_atr:.2f} ATR)",
                     "ce_price": pos.ce_price,
+                    "pnl_atr": pnl_atr,
                 }
         else:
             if current_price >= pos.ce_price:
                 return {
                     "action": "close",
-                    "reason": f"CE tetiklendi @ {pos.ce_price:.6f} (kâr %{pnl_pct:.2f})",
+                    "events": events,
+                    "reason": f"CE tetiklendi ({pos.ce_trail_atr} ATR geri, kâr {pnl_atr:.2f} ATR)",
                     "ce_price": pos.ce_price,
+                    "pnl_atr": pnl_atr,
                 }
 
-        return {"action": "none", "reason": "tracking", "ce_price": pos.ce_price, "pnl_pct": pnl_pct}
+        return {"action": "none", "events": events, "ce_price": pos.ce_price, "pnl_atr": pnl_atr}

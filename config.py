@@ -2,6 +2,7 @@
 Trading Bot Configuration
 Tüm ayarlar burada. API key'leri .env dosyasından okunur.
 """
+
 import os
 from dotenv import load_dotenv
 
@@ -21,58 +22,57 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
 # ============================================================
-# COIN LISTESI
+# COIN LISTESI (26 adet, Bybit Futures sembolleri)
 # ============================================================
 SYMBOLS = [
-    "SOLUSDT", "XRPUSDT", "DOGEUSDT", "TRXUSDT", "LTCUSDT",
-    "ADAUSDT", "LINKUSDT", "AVAXUSDT", "SUIUSDT",
-    "1000PEPEUSDT", "TONUSDT", "NEARUSDT", "APTUSDT", "INJUSDT",
+    "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
+    "SUIUSDT", "ZECUSDT", "DOGEUSDT", "TONUSDT", "LAYERUSDT",
+    "TRXUSDT", "AAVEUSDT", "ADAUSDT", "LTCUSDT", "LINKUSDT",
+    "APTUSDT", "INJUSDT", "AVAXUSDT", "NEARUSDT",
+    "1000PEPEUSDT", "1000SHIBUSDT",
+    "MEGAUSDT", "ONDOUSDT", "HYPEUSDT", "UNIUSDT", "ASTERUSDT",
 ]
 
 # ============================================================
 # STRATEJI PARAMETRELERI
 # ============================================================
-TIMEFRAME = "30"  # Bybit format: 30 dakika
-MTF_2H = "120"    # 2 saatlik
-MTF_4H = "240"    # 4 saatlik
+TIMEFRAME = "30"   # 30 dakikalık (KDJ + RSI bu mumlarda kontrol)
+MTF_4H = "240"     # 4 saatlik (yön onayı için)
 
 # Indikatör periyotları
 ATR_PERIOD = 14
-ADX_PERIOD = 14
 RSI_FAST = 6
 RSI_SLOW = 14
 KDJ_PERIOD = 9
 KDJ_K = 3
 KDJ_D = 3
 
-# Filtre eşikleri
-ATR_MIN_PCT = 0.5   # ATR% minimum (örn: %0.5)
-ADX_MIN = 20        # ADX minimum
-
 # ============================================================
 # RİSK YONETIMI
 # ============================================================
-LEVERAGE = 5
-STAKE_PERCENT = 20      # Bakiyenin %20'si stake olarak
-STOP_LOSS_PERCENT = 3   # %3 stop loss (borsada)
+LEVERAGE = 10
+STAKE_PERCENT = 20         # Bakiyenin %20'si stake olarak
+SL_ATR_MULTIPLIER = 1.5    # Borsa SL: giriş ± (1.5 × ATR)
 MAX_OPEN_POSITIONS = 5
 
 # ============================================================
-# CHANDELIER EXIT
+# CHANDELIER EXIT (ATR bazlı)
 # ============================================================
-CE_INITIAL_ATR = 3.0    # Başlangıç: 3 ATR
-CE_AT_2PCT = 2.0        # +%2 kârda: 2 ATR
-CE_AT_3PCT = 1.0        # +%3 kârda: 1 ATR
-CE_AT_4PCT = 0.5        # +%4+ kârda: 0.5 ATR
+BREAKEVEN_TRIGGER_ATR = 1.0    # Kâr ≥ 1 ATR → borsa SL giriş fiyatına çekilir
+CE_ACTIVATION_ATR = 1.0        # Kâr ≥ 1 ATR → CE aktif olur
+CE_INITIAL_TRAIL_ATR = 1.0     # Aktif olunca: 1 ATR geriden takip
+CE_TIGHT_TRIGGER_ATR = 2.0     # Kâr ≥ 2 ATR → CE sıkışır
+CE_TIGHT_TRAIL_ATR = 0.5       # Sıkışınca: 0.5 ATR geriden takip (son durak)
 
-# Breakeven (SL'yi giriş fiyatına çek)
-BREAKEVEN_TRIGGER_PCT = 1.0  # +%1 kârda
+# ============================================================
+# EMİR TİPİ (LIMIT - market gibi davranan)
+# ============================================================
+LIMIT_PRICE_OFFSET_PCT = 0.1   # Limit fiyat: anlık fiyat ± %0.1
 
 # ============================================================
 # DONGU AYARLARI
 # ============================================================
-ENTRY_SCAN_INTERVAL = 30  # 30 dakika (mum kapanışında)
-EXIT_CHECK_INTERVAL = 60  # 60 saniye (her dakika)
+EXIT_CHECK_INTERVAL = 60   # 60 saniye
 
 # Logging
 LOG_LEVEL = "INFO"

@@ -2,13 +2,18 @@
 Bybit Borsa İşlemleri
 pybit kütüphanesi (Unified Trading API V5) kullanılır.
 """
+
 import logging
 import time
 from decimal import Decimal, ROUND_DOWN
+
 import pandas as pd
 from pybit.unified_trading import HTTP
 
-from config import BYBIT_API_KEY, BYBIT_API_SECRET, BYBIT_TESTNET, LEVERAGE
+from config import (
+    BYBIT_API_KEY, BYBIT_API_SECRET, BYBIT_TESTNET,
+    LEVERAGE, LIMIT_PRICE_OFFSET_PCT,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -46,24 +51,42 @@ class BybitExchange:
         except Exception as e:
             logger.exception(f"Symbol info yükleme hatası: {e}")
 
-    def round_qty(self, symbol: str, qty: float) -> Decimal:
-        """Miktarı borsanın izin verdiği step'e yuvarlar (aşağı). Decimal döner."""
+    def round_qty(self, symbol: str, qty: float) -> str:
+        """Miktarı borsanın izin verdiği step'e yuvarlar (aşağı). STRING döner."""
         info = self.symbol_info_cache.get(symbol)
         if not info:
-            return Decimal(str(qty))
+            return f"{qty:.8f}".rstrip('0').rstrip('.')
+
         step = info["qty_step"]
         q = Decimal(str(qty))
         rounded = (q // step) * step
-        return rounded
 
-    def round_price(self, symbol: str, price: float) -> float:
+        # Step'ten ondalık basamak sayısını çıkar
+        step_str = format(step, 'f')
+        if '.' in step_str:
+            decimals = len(step_str.rstrip('0').split('.')[1])
+        else:
+            decimals = 0
+
+        return f"{rounded:.{decimals}f}"
+
+    def round_price(self, symbol: str, price: float) -> str:
+        """Fiyatı tick_size'a yuvarlar. STRING döner."""
         info = self.symbol_info_cache.get(symbol)
         if not info:
-            return float(price)
+            return f"{price:.6f}"
+
         tick = info["tick_size"]
         p = Decimal(str(price))
         rounded = (p / tick).quantize(Decimal("1"), rounding=ROUND_DOWN) * tick
-        return float(rounded)
+
+        tick_str = format(tick, 'f')
+        if '.' in tick_str:
+            decimals = len(tick_str.rstrip('0').split('.')[1])
+        else:
+            decimals = 0
+
+        return f"{rounded:.{decimals}f}"
 
     def get_min_qty(self, symbol: str) -> float:
         info = self.symbol_info_cache.get(symbol)
@@ -74,7 +97,7 @@ class BybitExchange:
     # ============================================================
     def get_klines(self, symbol: str, interval: str, limit: int = 200) -> pd.DataFrame:
         try:
-            time.sleep(1)
+            time.sleep(0.3)
             res = self.session.get_kline(
                 category="linear",
                 symbol=symbol,
@@ -87,7 +110,6 @@ class BybitExchange:
 
             rows = res["result"]["list"]
             rows = list(reversed(rows))
-
             df = pd.DataFrame(rows, columns=["timestamp", "open", "high", "low", "close", "volume", "turnover"])
             df["timestamp"] = pd.to_numeric(df["timestamp"])
             for col in ["open", "high", "low", "close", "volume"]:
@@ -115,6 +137,7 @@ class BybitExchange:
     # BAKIYE
     # ============================================================
     def get_usdt_balance(self) -> float:
+        """Toplam USDT bakiyesi (cüzdan)."""
         try:
             res = self.session.get_wallet_balance(accountType="UNIFIED", coin="USDT")
             if res.get("retCode") != 0:
@@ -128,6 +151,26 @@ class BybitExchange:
             return 0.0
         except Exception as e:
             logger.exception(f"Bakiye çekme hatası: {e}")
+            return 0.0
+
+    def get_available_balance(self) -> float:
+        """Yeni pozisyon için kullanılabilir bakiye."""
+        try:
+            res = self.session.get_wallet_balance(accountType="UNIFIED", coin="USDT")
+            if res.get("retCode") != 0:
+                return 0.0
+            for item in res["result"]["list"]:
+                tab = item.get("totalAvailableBalance", "")
+                if tab:
+                    return float(tab)
+                for coin in item["coin"]:
+                    if coin["coin"] == "USDT":
+                        ab = coin.get("availableToWithdraw", "")
+                        if ab:
+                            return float(ab)
+            return 0.0
+        except Exception as e:
+            logger.exception(f"Available balance hatası: {e}")
             return 0.0
 
     # ============================================================
@@ -150,31 +193,40 @@ class BybitExchange:
             return False
 
     # ============================================================
-    # POZISYON AÇMA
+    # POZISYON AÇMA (LIMIT IOC - market gibi)
     # ============================================================
-    def open_position(self, symbol: str, side: str, qty: float, stop_loss_price: float) -> dict:
+    def open_position(self, symbol: str, side: str, qty: float,
+                      stop_loss_price: float, current_price: float) -> dict:
         try:
             self.set_leverage(symbol, LEVERAGE)
 
-            # Decimal ile doğru yuvarlama
-            rounded_qty = self.round_qty(symbol, qty)
-            qty_str = str(rounded_qty)
+            qty_str = self.round_qty(symbol, qty)
+            sl_str = self.round_price(symbol, stop_loss_price)
 
-            sl_str = str(self.round_price(symbol, stop_loss_price))
+            # Limit fiyat: market gibi anlık dolar
+            if side == "Buy":
+                limit_price = current_price * (1 + LIMIT_PRICE_OFFSET_PCT / 100)
+            else:
+                limit_price = current_price * (1 - LIMIT_PRICE_OFFSET_PCT / 100)
+            limit_price_str = self.round_price(symbol, limit_price)
 
-            logger.info(f"{symbol} emir: qty={qty_str}, sl={sl_str}")
+            logger.info(f"{symbol} LIMIT {side}: qty={qty_str}, "
+                        f"price={limit_price_str}, sl={sl_str}")
 
             res = self.session.place_order(
                 category="linear",
                 symbol=symbol,
                 side=side,
-                orderType="Market",
+                orderType="Limit",
                 qty=qty_str,
+                price=limit_price_str,
+                timeInForce="IOC",
                 stopLoss=sl_str,
                 slTriggerBy="LastPrice",
                 positionIdx=0,
                 reduceOnly=False,
             )
+
             if res.get("retCode") != 0:
                 return {"success": False, "order_id": "", "message": res.get("retMsg", "Bilinmeyen hata")}
 
@@ -185,18 +237,29 @@ class BybitExchange:
             return {"success": False, "order_id": "", "message": str(e)}
 
     # ============================================================
-    # POZISYON KAPATMA
+    # POZISYON KAPATMA (LIMIT IOC)
     # ============================================================
-    def close_position(self, symbol: str, side: str, qty: float) -> dict:
+    def close_position(self, symbol: str, side: str, qty: float, current_price: float) -> dict:
         try:
-            rounded_qty = self.round_qty(symbol, qty)
-            qty_str = str(rounded_qty)
+            qty_str = self.round_qty(symbol, qty)
+
+            # Kapatırken de market gibi davranan limit
+            if side == "Buy":
+                limit_price = current_price * (1 + LIMIT_PRICE_OFFSET_PCT / 100)
+            else:
+                limit_price = current_price * (1 - LIMIT_PRICE_OFFSET_PCT / 100)
+            limit_price_str = self.round_price(symbol, limit_price)
+
+            logger.info(f"{symbol} CLOSE LIMIT {side}: qty={qty_str}, price={limit_price_str}")
+
             res = self.session.place_order(
                 category="linear",
                 symbol=symbol,
                 side=side,
-                orderType="Market",
+                orderType="Limit",
                 qty=qty_str,
+                price=limit_price_str,
+                timeInForce="IOC",
                 positionIdx=0,
                 reduceOnly=True,
             )
@@ -208,11 +271,11 @@ class BybitExchange:
             return {"success": False, "message": str(e)}
 
     # ============================================================
-    # STOP LOSS GÜNCELLEME (Breakeven)
+    # STOP LOSS GÜNCELLEME (Breakeven için)
     # ============================================================
     def update_stop_loss(self, symbol: str, new_sl: float) -> dict:
         try:
-            sl_str = str(self.round_price(symbol, new_sl))
+            sl_str = self.round_price(symbol, new_sl)
             res = self.session.set_trading_stop(
                 category="linear",
                 symbol=symbol,

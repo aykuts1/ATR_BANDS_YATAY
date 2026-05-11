@@ -48,21 +48,19 @@ ATR_MIN_PCT = 0.5      # ATR% > 0.5 olmayan piyasada giriş yok (ölü volatilit
 # ============================================================
 LEVERAGE = 10
 STAKE_PERCENT = 20         # Bakiyenin %20'si stake olarak
-SL_ATR_MULTIPLIER = 1.5    # Borsa SL: giriş ± (1.5 × ATR)
+SL_ATR_MULTIPLIER = 1.0    # Borsa SL: giriş ± (1.0 × ATR)
 MAX_OPEN_POSITIONS = 5
 # ============================================================
-# CHANDELIER EXIT (ATR bazlı) - 3 KADEMELİ YENİ SİSTEM
+# CHANDELIER EXIT (ATR bazlı) - 2 KADEMELİ SISTEM
 # ============================================================
+# Giriş (Kademe 0): CE giriş anında AKTİF, 1.0 ATR geriden takip
+CE_INITIAL_TRAIL_ATR = 1.0     # CE: giriş anında 1.0 ATR geriden takip başlar
 # Birinci eşik: Kâr ≥ 0.5 ATR
-SL_LOCK_TRIGGER_ATR = 0.5      # Borsa SL +0.1 ATR'ye çekilir + CE aktif olur
-SL_LOCK_OFFSET_ATR = 0.1       # Borsa SL: giriş ± (0.1 × ATR) — kâr kilidi
-CE_ACTIVATION_ATR = 0.5        # CE aktif olur (SL_LOCK_TRIGGER_ATR ile aynı)
-CE_INITIAL_TRAIL_ATR = 1.0     # CE: 1.0 ATR geriden takip
-# İkinci eşik: Kâr ≥ 1.5 ATR
-CE_MID_TRIGGER_ATR = 1.5       # CE 0.75 ATR'ye sıkışır
-CE_MID_TRAIL_ATR = 0.75
-# Üçüncü eşik: Kâr ≥ 2.0 ATR
-CE_TIGHT_TRIGGER_ATR = 2.0     # CE 0.5 ATR'ye sıkışır (son durak)
+SL_LOCK_TRIGGER_ATR = 0.5      # Borsa SL +0.2 ATR'ye çekilir (kâr kilidi)
+SL_LOCK_OFFSET_ATR = 0.2       # Borsa SL: giriş ± (0.2 × ATR) — kâr kilidi
+# Bu kademede CE değişmez (1.0 ATR trail aynen devam eder)
+# İkinci eşik: Kâr ≥ 1.0 ATR
+CE_TIGHT_TRIGGER_ATR = 1.0     # CE 0.5 ATR'ye sıkışır (son durak)
 CE_TIGHT_TRAIL_ATR = 0.5
 # ============================================================
 # EMİR TİPİ (LIMIT - market gibi davranan)

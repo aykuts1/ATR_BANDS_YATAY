@@ -1,12 +1,19 @@
 """
-Pozisyon Yönetimi (ATR bazlı) - 3 KADEMELİ SİSTEM
+Pozisyon Yönetimi (ATR bazlı) - 2 KADEMELİ SİSTEM
 
-- Borsa SL: giriş anında ±1.5 ATR uzakta
-- Kâr ≥ 0.5 ATR → Borsa SL giriş +0.1 ATR'ye çekilir (kâr kilidi) + CE aktif (1.0 ATR trail)
-- Kâr ≥ 1.5 ATR → CE 0.75 ATR trail'e sıkışır
-- Kâr ≥ 2.0 ATR → CE 0.5 ATR trail'e sıkışır (son durak, kâr kilidi)
-- CE asla geri çekilmez
-- CE'ye fiyat çarptıysa bot pozisyonu kapatır
+KADEME 0 (Giriş anında):
+  - Borsa SL: giriş ± 1.0 ATR (emniyet kemeri)
+  - CE AKTİF: giriş ± 1.0 ATR (highest/lowest takibi başlar)
+
+KADEME 1 (Kâr ≥ 0.5 ATR):
+  - Borsa SL → giriş ± 0.2 ATR'ye çekilir (kâr kilidi)
+  - CE değişmez (hâlâ 1.0 ATR trail)
+
+KADEME 2 (Kâr ≥ 1.0 ATR):
+  - CE 0.5 ATR trail'e sıkışır (son durak)
+  - Borsa SL aynı (giriş ± 0.2 ATR)
+
+CE asla geri çekilmez. CE'ye fiyat çarptıysa bot pozisyonu kapatır.
 """
 
 import logging
@@ -19,10 +26,7 @@ from typing import Optional
 from config import (
     SL_LOCK_TRIGGER_ATR,
     SL_LOCK_OFFSET_ATR,
-    CE_ACTIVATION_ATR,
     CE_INITIAL_TRAIL_ATR,
-    CE_MID_TRIGGER_ATR,
-    CE_MID_TRAIL_ATR,
     CE_TIGHT_TRIGGER_ATR,
     CE_TIGHT_TRAIL_ATR,
 )
@@ -38,12 +42,11 @@ class TrackedPosition:
     side: str               # 'long' veya 'short'
     entry_price: float
     qty: float
-    initial_sl: float       # Borsa'ya verilen ilk SL (1.5 ATR)
+    initial_sl: float       # Borsa'ya verilen ilk SL (-1.0 ATR)
     atr_at_entry: float     # Giriş anındaki ATR
-    sl_locked: bool = False         # Borsa SL kâr kilidine (+0.1 ATR) çekildi mi
-    locked_sl_price: float = 0.0    # Kâr kilidi fiyatı (giriş ± 0.1 ATR)
-    ce_active: bool = False         # CE aktif mi (kâr 0.5 ATR'yi geçti mi)
-    ce_price: float = 0.0           # Mevcut CE seviyesi (kilitlenmiş)
+    sl_locked: bool = False         # Borsa SL kâr kilidine (+0.2 ATR) çekildi mi
+    locked_sl_price: float = 0.0    # Kâr kilidi fiyatı (giriş ± 0.2 ATR)
+    ce_price: float = 0.0           # Mevcut CE seviyesi (kilitlenmiş, geri çekilmez)
     ce_trail_atr: float = 1.0       # CE'nin kaç ATR geriden takip ettiği
     highest_price: float = 0.0
     lowest_price: float = 0.0
@@ -76,12 +79,14 @@ class PositionManager:
             valid_fields = {f.name for f in fields(TrackedPosition)}
 
             for sym, p in data.items():
-                # Eski state'lerden migration: breakeven_active → sl_locked
+                # Eski state migration: breakeven_active → sl_locked
                 if "breakeven_active" in p and "sl_locked" not in p:
                     p["sl_locked"] = p.pop("breakeven_active")
-                # locked_sl_price eksikse: eski breakeven mantığında giriş fiyatıydı
+                # Eski sistemde locked_sl_price yoksa, giriş fiyatı kabul edilir
                 if p.get("sl_locked") and "locked_sl_price" not in p:
                     p["locked_sl_price"] = p.get("entry_price", 0.0)
+                # ce_active kaldırıldı (CE artık her zaman aktif), eski state'lerden temizle
+                p.pop("ce_active", None)
                 # Bilinmeyen alanları at, eksikleri default'la başlat
                 filtered = {k: v for k, v in p.items() if k in valid_fields}
                 self.positions[sym] = TrackedPosition(**filtered)
@@ -95,24 +100,36 @@ class PositionManager:
     # ============================================================
     def add_position(self, symbol: str, side: str, entry_price: float, qty: float,
                      initial_sl: float, atr_value: float):
+        """
+        Giriş anında CE aktif olarak başlatılır.
+        CE seviyesi = giriş ± (CE_INITIAL_TRAIL_ATR × ATR) — yani 1.0 ATR geri
+        """
+        side_lower = side.lower()
+        if side_lower == "long":
+            ce_price = entry_price - (CE_INITIAL_TRAIL_ATR * atr_value)
+        else:
+            ce_price = entry_price + (CE_INITIAL_TRAIL_ATR * atr_value)
+
         pos = TrackedPosition(
             symbol=symbol,
-            side=side.lower(),
+            side=side_lower,
             entry_price=entry_price,
             qty=qty,
             initial_sl=initial_sl,
             atr_at_entry=atr_value,
             sl_locked=False,
             locked_sl_price=0.0,
-            ce_active=False,
-            ce_price=0.0,
+            ce_price=ce_price,
             ce_trail_atr=CE_INITIAL_TRAIL_ATR,
             highest_price=entry_price,
             lowest_price=entry_price,
         )
         self.positions[symbol] = pos
         self._save_state()
-        logger.info(f"Pozisyon eklendi: {symbol} {side} entry={entry_price} ATR={atr_value}")
+        logger.info(
+            f"Pozisyon eklendi: {symbol} {side_lower} entry={entry_price} "
+            f"ATR={atr_value} CE={ce_price:.6f} (1.0 ATR geri)"
+        )
 
     def remove_position(self, symbol: str):
         if symbol in self.positions:
@@ -158,10 +175,10 @@ class PositionManager:
         """
         Returns: {
             'action': 'none' | 'close',
-            'events': ['sl_lock_and_ce', 'ce_mid_tightened', 'ce_tightened'],
+            'events': ['sl_lock', 'ce_tightened'],
             'reason': str (close ise),
             'ce_price': float,
-            'new_sl': float (sl_lock_and_ce event'inde),
+            'new_sl': float (sl_lock event'inde),
             'pnl_atr': float,
         }
         """
@@ -182,47 +199,23 @@ class PositionManager:
 
         pnl_atr = self.calculate_pnl_atr(pos.side, pos.entry_price, current_price, pos.atr_at_entry)
 
-        # 2. BİRİNCİ EŞİK: Kâr ≥ 0.5 ATR
-        #    Borsa SL +0.1 ATR'ye çekilir (kâr kilidi) + CE aktif olur (1.0 ATR trail)
+        # 2. KADEME 1: Kâr ≥ 0.5 ATR → Borsa SL +0.2 ATR'ye çekilir (CE değişmez)
         if not pos.sl_locked and pnl_atr >= SL_LOCK_TRIGGER_ATR:
             pos.sl_locked = True
-            pos.ce_active = True
-            pos.ce_trail_atr = CE_INITIAL_TRAIL_ATR  # 1.0
-
             if pos.side == "long":
                 pos.locked_sl_price = pos.entry_price + (SL_LOCK_OFFSET_ATR * pos.atr_at_entry)
-                pos.ce_price = pos.highest_price - (CE_INITIAL_TRAIL_ATR * pos.atr_at_entry)
             else:
                 pos.locked_sl_price = pos.entry_price - (SL_LOCK_OFFSET_ATR * pos.atr_at_entry)
-                pos.ce_price = pos.lowest_price + (CE_INITIAL_TRAIL_ATR * pos.atr_at_entry)
 
-            events.append("sl_lock_and_ce")
+            events.append("sl_lock")
             result_extra["new_sl"] = pos.locked_sl_price
             logger.info(
-                f"{symbol} kâr kilidi + CE aktif "
-                f"(PnL: {pnl_atr:.2f} ATR, SL: {pos.locked_sl_price:.6f}, CE: {pos.ce_price:.6f})"
+                f"{symbol} kâr kilidi aktif "
+                f"(PnL: {pnl_atr:.2f} ATR, SL: {pos.locked_sl_price:.6f}, "
+                f"CE: {pos.ce_price:.6f} — değişmedi, hâlâ 1.0 ATR trail)"
             )
 
-        # CE aktif değilse devam etme
-        if not pos.ce_active:
-            self._save_state()
-            return {"action": "none", "events": events, "pnl_atr": pnl_atr, **result_extra}
-
-        # 3. İKİNCİ EŞİK: Kâr ≥ 1.5 ATR → CE 0.75 ATR trail
-        if pos.ce_trail_atr > CE_MID_TRAIL_ATR and pnl_atr >= CE_MID_TRIGGER_ATR:
-            pos.ce_trail_atr = CE_MID_TRAIL_ATR  # 0.75
-            if pos.side == "long":
-                new_ce = pos.highest_price - (CE_MID_TRAIL_ATR * pos.atr_at_entry)
-                if new_ce > pos.ce_price:
-                    pos.ce_price = new_ce
-            else:
-                new_ce = pos.lowest_price + (CE_MID_TRAIL_ATR * pos.atr_at_entry)
-                if new_ce < pos.ce_price:
-                    pos.ce_price = new_ce
-            events.append("ce_mid_tightened")
-            logger.info(f"{symbol} CE orta sıkışma (0.75 ATR trail), CE: {pos.ce_price:.6f}")
-
-        # 4. ÜÇÜNCÜ EŞİK: Kâr ≥ 2.0 ATR → CE 0.5 ATR trail
+        # 3. KADEME 2: Kâr ≥ 1.0 ATR → CE 0.5 ATR trail'e sıkışır (son durak)
         if pos.ce_trail_atr > CE_TIGHT_TRAIL_ATR and pnl_atr >= CE_TIGHT_TRIGGER_ATR:
             pos.ce_trail_atr = CE_TIGHT_TRAIL_ATR  # 0.5
             if pos.side == "long":
@@ -234,9 +227,9 @@ class PositionManager:
                 if new_ce < pos.ce_price:
                     pos.ce_price = new_ce
             events.append("ce_tightened")
-            logger.info(f"{symbol} CE son sıkışma (0.5 ATR trail), CE: {pos.ce_price:.6f}")
+            logger.info(f"{symbol} CE sıkıştı (0.5 ATR trail), CE: {pos.ce_price:.6f}")
 
-        # 5. CE seviyesini takip et (asla geri çekilmez)
+        # 4. CE seviyesini takip et (asla geri çekilmez)
         if pos.side == "long":
             new_ce = pos.highest_price - (pos.ce_trail_atr * pos.atr_at_entry)
             if new_ce > pos.ce_price:
@@ -248,7 +241,7 @@ class PositionManager:
 
         self._save_state()
 
-        # 6. CE tetiklendi mi?
+        # 5. CE tetiklendi mi?
         if pos.side == "long":
             if current_price <= pos.ce_price:
                 return {

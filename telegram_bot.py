@@ -39,52 +39,50 @@ def notify_bot_started(balance: float, stake: float, testnet: bool):
         f"🤖 <b>Bot Başlatıldı</b> [{mode}]\n\n"
         f"💰 Bakiye: <b>{balance:.2f} USDT</b>\n"
         f"📊 Stake (her işlem): <b>{stake:.2f} USDT</b>\n"
-        f"⚡ Kaldıraç: 10x | Borsa SL: -1.5 ATR | Max 5 işlem\n"
-        f"🔒 Kâr ≥ 0.5 ATR: SL → +0.1 ATR + CE 1.0 ATR\n"
-        f"🎯 Kâr ≥ 1.5 ATR: CE → 0.75 ATR\n"
-        f"💎 Kâr ≥ 2.0 ATR: CE → 0.5 ATR (son durak)"
+        f"⚡ Kaldıraç: 10x | Max 5 işlem\n\n"
+        f"<b>Giriş Filtreleri:</b>\n"
+        f"  • ATR% > 0.5 (30dk)\n"
+        f"  • ADX > 20 (30dk)\n"
+        f"  • KDJ + RSI kesişim yön uyumu\n"
+        f"  • 4H yön onayı\n\n"
+        f"<b>Çıkış Sistemi (2 Kademeli):</b>\n"
+        f"🛡️ Giriş: Borsa SL -1.0 ATR | CE -1.0 ATR (aktif)\n"
+        f"🔒 Kâr ≥ 0.5 ATR: SL → +0.2 ATR (kâr kilidi)\n"
+        f"🎯 Kâr ≥ 1.0 ATR: CE → 0.5 ATR (son durak)"
     )
     send_telegram(msg)
 
 
-def notify_position_opened(symbol: str, side: str, entry: float, qty: float, sl: float, atr: float):
+def notify_position_opened(symbol: str, side: str, entry: float, qty: float,
+                            sl: float, ce: float, atr: float):
     arrow = "🟢 LONG" if side.lower() == "long" else "🔴 SHORT"
     msg = (
         f"{arrow} <b>{symbol}</b> AÇILDI\n\n"
         f"📍 Giriş: <code>{entry:.6f}</code>\n"
         f"📦 Miktar: <code>{qty}</code>\n"
-        f"🛡️ Borsa SL: <code>{sl:.6f}</code> (-1.5 ATR)\n"
-        f"📏 ATR: <code>{atr:.6f}</code>\n"
-        f"🕯️ CE: Pasif (kâr 0.5 ATR'yi geçince aktif olur)"
+        f"🛡️ Borsa SL: <code>{sl:.6f}</code> (-1.0 ATR)\n"
+        f"🕯️ CE: <code>{ce:.6f}</code> (-1.0 ATR, aktif takip)\n"
+        f"📏 ATR: <code>{atr:.6f}</code>"
     )
     send_telegram(msg)
 
 
-def notify_sl_lock_and_ce(symbol: str, sl_price: float, ce_price: float):
-    """Birinci eşik: kâr ≥ 0.5 ATR → SL +0.1 ATR'ye çekilir + CE aktif"""
+def notify_sl_lock(symbol: str, sl_price: float):
+    """Kademe 1: kâr ≥ 0.5 ATR → SL +0.2 ATR'ye çekilir (kâr kilidi)"""
     msg = (
-        f"🔒 <b>{symbol}</b> Kâr Kilidi + CE Aktif\n\n"
-        f"📍 Borsa SL → <code>{sl_price:.6f}</code> (+0.1 ATR — kâr garantili)\n"
-        f"🕯️ CE: <code>{ce_price:.6f}</code> (1.0 ATR geriden takip)"
+        f"🔒 <b>{symbol}</b> Kâr Kilidi Aktif\n\n"
+        f"📍 Borsa SL → <code>{sl_price:.6f}</code> (+0.2 ATR — kâr garantili)\n"
+        f"🕯️ CE: değişmedi (hâlâ 1.0 ATR geriden takip)"
     )
     send_telegram(msg)
 
 
 def notify_ce_tightened(symbol: str, ce_price: float, trail_atr: float):
-    """İkinci/üçüncü eşik: CE sıkışma bildirimi"""
-    if trail_atr <= 0.5:
-        title = "CE Son Sıkışma (0.5 ATR)"
-        emoji = "💎"
-        note = "Son durak — kâr kilidi sıkı"
-    else:
-        title = f"CE Orta Sıkışma ({trail_atr} ATR)"
-        emoji = "🎯"
-        note = "Kâr kilidi devrede"
-
+    """Kademe 2: kâr ≥ 1.0 ATR → CE 0.5 ATR'a sıkışır (son durak)"""
     msg = (
-        f"{emoji} <b>{symbol}</b> {title}\n\n"
+        f"🎯 <b>{symbol}</b> CE Sıkıştı (Son Durak)\n\n"
         f"🕯️ CE: <code>{ce_price:.6f}</code> ({trail_atr} ATR geri)\n"
-        f"💼 {note}"
+        f"💼 Kâr kilidi sıkı — fiyat CE'ye değerse kapanır"
     )
     send_telegram(msg)
 
@@ -141,7 +139,7 @@ def notify_scan_summary(scanned: list, errors: list, opened: list,
     elif capacity_full and not opened:
         msg += "⚠️ <b>Kapasite Dolu (5/5)</b>\n  <i>Hiçbir sinyal gelmedi.</i>\n\n"
 
-    # Sebepler
+    # Sebepler — atlanma nedenleri gruplu listelenir
     if scanned:
         if not opened and not skipped_capacity:
             msg += f"Toplam {len(scanned)} coin tarandı, sinyal yok.\n\n"
@@ -150,8 +148,10 @@ def notify_scan_summary(scanned: list, errors: list, opened: list,
         for sym, reason in scanned:
             reason_groups.setdefault(reason, []).append(sym)
 
-        msg += "<b>Tarama Detayı:</b>\n"
-        for reason, syms in reason_groups.items():
+        msg += "<b>Tarama Detayı (Red Sebepleri):</b>\n"
+        # Sebepleri sembol sayısına göre büyükten küçüğe sırala
+        sorted_reasons = sorted(reason_groups.items(), key=lambda x: -len(x[1]))
+        for reason, syms in sorted_reasons:
             msg += f"  <i>{reason}</i> ({len(syms)})\n"
             display = syms[:6]
             msg += f"   • {', '.join(display)}"

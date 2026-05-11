@@ -14,6 +14,7 @@ from config import (
     LEVERAGE, STAKE_PERCENT, SL_ATR_MULTIPLIER,
     MAX_OPEN_POSITIONS, EXIT_CHECK_INTERVAL,
     BYBIT_TESTNET, LOG_LEVEL, ATR_PERIOD,
+    CE_INITIAL_TRAIL_ATR,
 )
 from exchange import BybitExchange
 from filters import evaluate_signal
@@ -53,11 +54,19 @@ def calculate_position_qty(price: float, stake: float) -> float:
 
 
 def stop_loss_price_atr(side: str, entry: float, atr: float) -> float:
-    """1.5 ATR uzaklıkta borsa SL fiyatı."""
+    """1.0 ATR uzaklıkta borsa SL fiyatı."""
     if side == "long":
         return entry - (SL_ATR_MULTIPLIER * atr)
     else:
         return entry + (SL_ATR_MULTIPLIER * atr)
+
+
+def initial_ce_price(side: str, entry: float, atr: float) -> float:
+    """Giriş anındaki CE seviyesi: 1.0 ATR geriden takip başlar."""
+    if side == "long":
+        return entry - (CE_INITIAL_TRAIL_ATR * atr)
+    else:
+        return entry + (CE_INITIAL_TRAIL_ATR * atr)
 
 
 # ============================================================
@@ -130,6 +139,7 @@ def scan_for_entries():
                     atr_value = current_price * 0.01
 
                 sl_price = stop_loss_price_atr(signal_dir, current_price, atr_value)
+                ce_price = initial_ce_price(signal_dir, current_price, atr_value)
 
                 # Miktar hesabı
                 raw_qty = calculate_position_qty(current_price, FIXED_STAKE)
@@ -139,7 +149,8 @@ def scan_for_entries():
                     continue
 
                 logger.info(f"{symbol} {bybit_side} açılıyor: qty={raw_qty:.6f}, "
-                            f"price={current_price}, SL={sl_price:.6f}, ATR={atr_value:.6f}")
+                            f"price={current_price}, SL={sl_price:.6f}, "
+                            f"CE={ce_price:.6f}, ATR={atr_value:.6f}")
 
                 # Pozisyon aç (Limit IOC)
                 order_result = exchange.open_position(
@@ -169,6 +180,9 @@ def scan_for_entries():
                 actual_entry = live_pos["entry_price"]
                 actual_qty = live_pos["size"]
 
+                # Gerçek giriş fiyatına göre CE'yi yeniden hesapla
+                actual_ce = initial_ce_price(signal_dir, actual_entry, atr_value)
+
                 # Manager'a kaydet
                 position_manager.add_position(
                     symbol=symbol,
@@ -182,7 +196,7 @@ def scan_for_entries():
                 tg.notify_position_opened(
                     symbol=symbol, side=signal_dir,
                     entry=actual_entry, qty=actual_qty,
-                    sl=sl_price, atr=atr_value,
+                    sl=sl_price, ce=actual_ce, atr=atr_value,
                 )
                 opened.append((symbol, signal_dir))
 
@@ -229,9 +243,9 @@ def track_open_positions():
                     pnl_pct = position_manager.calculate_pnl_pct(pos.side, pos.entry_price, last_price)
 
                     if pos.sl_locked:
-                        reason = "Borsa SL tetiklendi (+0.1 ATR kâr kilidi)"
+                        reason = "Borsa SL tetiklendi (+0.2 ATR kâr kilidi)"
                     else:
-                        reason = "Borsa SL tetiklendi (-1.5 ATR)"
+                        reason = "Borsa SL tetiklendi (-1.0 ATR)"
 
                     tg.notify_position_closed(
                         symbol=sym, side=pos.side,
@@ -257,17 +271,15 @@ def track_open_positions():
 
             # Olayları işle
             for event in result.get("events", []):
-                if event == "sl_lock_and_ce":
+                if event == "sl_lock":
                     new_sl = result.get("new_sl", pos.locked_sl_price)
                     sl_update = exchange.update_stop_loss(symbol, new_sl)
                     if sl_update["success"]:
-                        tg.notify_sl_lock_and_ce(symbol, new_sl, result["ce_price"])
+                        tg.notify_sl_lock(symbol, new_sl)
                         logger.info(f"{symbol} kâr kilidi aktif (SL: {new_sl:.6f})")
                     else:
                         logger.error(f"{symbol} SL güncellenemedi: {sl_update['message']}")
                         tg.notify_error(f"{symbol} SL güncellenemedi: {sl_update['message']}")
-                elif event == "ce_mid_tightened":
-                    tg.notify_ce_tightened(symbol, result["ce_price"], 0.75)
                 elif event == "ce_tightened":
                     tg.notify_ce_tightened(symbol, result["ce_price"], 0.5)
 

@@ -32,9 +32,8 @@ else:
 # Tüneller
 EMA_TUNNEL_PERIOD = 100  # EMA100 (filtre tüneli) - high & low
 EMA_SIGNAL_PERIOD = 21   # EMA21 (sinyal tüneli) - high & low & close
-# EMA21 Yön filtresi
-EMA_DIRECTION_LOOKBACK = 10        # Son N mumun EMA21 close ortalaması
-EMA_DIRECTION_TOLERANCE = 0.0005   # %0.05 tolerans (yumuşatma)
+# Armed state (2 adımlı giriş)
+ARMED_TIMEOUT_SECONDS = 7200  # 2 saat - armed durumu bu sürede tetiklenmezse sıfırlanır
 # Timeframe
 TIMEFRAME = "5"          # 5 dakikalık mum
 KLINE_LIMIT = 300        # EMA100 için yeterli mum sayısı

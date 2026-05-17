@@ -32,6 +32,8 @@ else:
 # Tüneller
 EMA_TUNNEL_PERIOD = 100  # EMA100 (filtre tüneli) - high & low
 EMA_SIGNAL_PERIOD = 21   # EMA21 (sinyal tüneli) - high & low & close
+# ATR (Chandelier Exit için)
+ATR_PERIOD = 14          # ATR periyodu - CE seviyesi için
 # Armed state (2 adımlı giriş)
 ARMED_TIMEOUT_SECONDS = 7200  # 2 saat - armed durumu bu sürede tetiklenmezse sıfırlanır
 # Timeframe
@@ -44,9 +46,8 @@ MAX_POSITIONS = 5        # Aynı anda max 5 işlem
 MARGIN_MODE = "ISOLATED" # Isolated margin
 # Stop Loss
 INITIAL_SL_PERCENT = 0.01  # %1 fiyat hareketi (kaldıraçsız)
-# Chandelier Exit (CE) Trailing Stop
-CE_ACTIVATION_PCT = 0.005  # Kar %0.5'i geçince CE aktif
-CE_TRAIL_PCT = 0.005       # En iyi fiyattan %0.5 geri dönüş = çıkış
+# Chandelier Exit (CE) - ATR bazlı trailing stop
+CE_ATR_MULTIPLIER = 1.0   # Aktivasyon ve trail mesafesi (1 ATR)
 # Tarama ve emir zamanlamaları
 SCAN_INTERVAL = 30           # Saniye - her 30sn tarama
 KLINE_REFRESH_INTERVAL = 60  # Saniye - klines cache yenileme

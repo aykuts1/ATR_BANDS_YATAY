@@ -230,7 +230,8 @@ def refresh_tunnels(client: BybitClient, symbol: str, force: bool = False) -> Op
             klines,
             config.EMA_TUNNEL_PERIOD,
             config.EMA_SIGNAL_PERIOD,
-        )
+            config.ATR_PERIOD,
+        )        
         if tunnels:
             TUNNEL_CACHE[symbol] = {"tunnels": tunnels, "ts": now}
             return tunnels

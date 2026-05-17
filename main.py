@@ -6,6 +6,13 @@ Her 30 saniyede tarama yapar:
 - Açık olmayan coinler için giriş kontrolü
 - 60 saniyede bir klines cache yenilenir
 - 5 dakikada bir Telegram durum raporu
+
+EMIR MANTIGI:
+- Yalnızca limit emir kullanılır. Market emir KULLANILMAZ.
+- Giriş: her saniye 1 tick agresif limit emir, max 20 deneme.
+        20 denemede dolmazsa sinyal atlanır.
+- Çıkış: her saniye 1 tick agresif limit emir (reduce-only), max 20 deneme.
+        20 denemede dolmazsa bir sonraki taramada tekrar denenir.
 """
 import time
 import traceback
@@ -24,15 +31,14 @@ from position_manager import Position, PositionManager
 # GLOBAL STATE
 # ============================================================
 STAKE_USDT: float = 0.0
-ACTIVE_SYMBOLS: List[str] = []          # 50x destekleyen coinler
-PREVIOUS_PRICES: Dict[str, float] = {}  # Geçen tarama fiyatları (kesişim için)
-TUNNEL_CACHE: Dict[str, dict] = {}      # Klines cache: {symbol: {tunnels, last_update_ts}}
-EXTERNAL_POSITIONS: set = set()         # Manuel açılmış pozisyonlar
+ACTIVE_SYMBOLS: List[str] = []
+PREVIOUS_PRICES: Dict[str, float] = {}
+TUNNEL_CACHE: Dict[str, dict] = {}
+EXTERNAL_POSITIONS: set = set()
 
-# Session stats
 SESSION_START_BALANCE: float = 0.0
 SESSION_PNL: float = 0.0
-RECENT_TRADES: List[dict] = []          # Son 5dk içinde kapanan işlemler
+RECENT_TRADES: List[dict] = []
 
 
 # ============================================================
@@ -53,14 +59,70 @@ def compute_initial_sl(side: str, entry_price: float) -> float:
     return entry_price * (1 + config.INITIAL_SL_PERCENT)
 
 
+def compute_aggressive_limit_price(side: str, current_price: float, tick_size: float) -> float:
+    """Buy → price + 1 tick, Sell → price - 1 tick. Returns tick-rounded price."""
+    if side == "Buy":
+        raw = current_price + tick_size
+    else:
+        raw = current_price - tick_size
+    return BybitClient.round_tick(raw, tick_size)
+
+
+# ============================================================
+# LIMIT EMIR DENEME DÖNGÜSÜ (giriş ve çıkış için ortak)
+# ============================================================
+def try_fill_limit(client: BybitClient, symbol: str, side: str, qty: float,
+                   tick_size: float, reduce_only: bool = False) -> Optional[str]:
+    """
+    Her saniye yeni fiyatla 1 tick agresif limit emir verir.
+    Max LIMIT_ORDER_MAX_RETRIES (20) deneme.
+    Doldurursa order_id döner, dolduramazsa None döner.
+
+    Market emir asla kullanılmaz.
+    """
+    for attempt in range(1, config.LIMIT_ORDER_MAX_RETRIES + 1):
+        try:
+            current_price = client.get_last_price(symbol)
+            limit_price = compute_aggressive_limit_price(side, current_price, tick_size)
+
+            order_id = client.place_limit_order(
+                symbol=symbol, side=side, qty=qty, price=limit_price,
+                reduce_only=reduce_only,
+            )
+
+            # 1 saniye bekle
+            time.sleep(config.LIMIT_ORDER_RETRY_INTERVAL)
+
+            status = client.get_order_status(symbol, order_id)
+            if status == "Filled":
+                tag = "REDUCE" if reduce_only else "ENTRY"
+                print(f"[LIMIT-FILL/{tag}] {symbol} attempt {attempt} @ {limit_price}")
+                return order_id
+
+            # Filled değil → iptal edip tekrar dene
+            try:
+                client.cancel_order(symbol, order_id)
+            except Exception:
+                pass
+
+        except Exception as e:
+            msg = str(e)
+            if "110007" in msg:
+                # Yetersiz bakiye
+                raise
+            if "110013" in msg:
+                # Kaldıraç desteklenmiyor
+                raise
+            print(f"[ERR] try_fill_limit attempt {attempt} {symbol}: {e}")
+            time.sleep(config.LIMIT_ORDER_RETRY_INTERVAL)
+
+    return None
+
+
 # ============================================================
 # STARTUP - 50x KALDIRAÇ KONTROLÜ
 # ============================================================
 def check_leverage_support(client: BybitClient) -> tuple:
-    """
-    Her coin için 50x destekleniyor mu kontrol eder.
-    Returns: (active_symbols, skipped_symbols)
-    """
     active: List[str] = []
     skipped: List[str] = []
 
@@ -74,7 +136,6 @@ def check_leverage_support(client: BybitClient) -> tuple:
                 print(f"[SKIP] {symbol} max leverage {max_lev}x < {config.LEVERAGE}x")
                 continue
 
-            # 50x destekliyor → isolated + leverage ayarla
             try:
                 client.set_isolated_margin(symbol, config.LEVERAGE)
             except Exception as e:
@@ -84,7 +145,6 @@ def check_leverage_support(client: BybitClient) -> tuple:
             except Exception as e:
                 msg = str(e)
                 if "110013" in msg:
-                    # Leverage limit exceeded
                     skipped.append(symbol)
                     tg.send_leverage_unsupported(symbol, max_lev)
                     print(f"[SKIP] {symbol}: 110013 leverage exceeded")
@@ -93,7 +153,7 @@ def check_leverage_support(client: BybitClient) -> tuple:
 
             active.append(symbol)
             print(f"[OK] {symbol} 50x ready")
-            time.sleep(0.15)  # rate limit
+            time.sleep(0.15)
 
         except Exception as e:
             print(f"[ERR] check_leverage {symbol}: {e}")
@@ -106,9 +166,6 @@ def check_leverage_support(client: BybitClient) -> tuple:
 # KLINES & TUNNEL CACHE
 # ============================================================
 def refresh_tunnels(client: BybitClient, symbol: str, force: bool = False) -> Optional[dict]:
-    """
-    Klines'i cache'e alır ve tünel değerlerini hesaplar.
-    """
     now = now_ts()
     cached = TUNNEL_CACHE.get(symbol)
     if not force and cached and (now - cached["ts"] < config.KLINE_REFRESH_INTERVAL):
@@ -116,7 +173,6 @@ def refresh_tunnels(client: BybitClient, symbol: str, force: bool = False) -> Op
 
     try:
         klines = client.get_klines(symbol, config.TIMEFRAME, config.KLINE_LIMIT)
-        # Son (açık) mumu çıkar - kapanmış mumlardan EMA hesaplanır
         if len(klines) >= 2:
             klines = klines[:-1]
         tunnels = indicators.compute_tunnels(
@@ -133,11 +189,11 @@ def refresh_tunnels(client: BybitClient, symbol: str, force: bool = False) -> Op
 
 
 # ============================================================
-# POZISYON AÇMA - Limit emir ile retry, sonra market
+# POZISYON AÇMA - Sadece limit emir, 20 deneme, market YOK
 # ============================================================
 def open_position(client: BybitClient, pm: PositionManager,
                   symbol: str, side: str, tunnels: dict) -> None:
-    """Pozisyon aç: önce limit emir (3 deneme), sonra market."""
+    """Pozisyon aç: limit emir döngüsü, dolmazsa sinyal atlanır."""
     try:
         info = client.get_instrument_info(symbol)
         tick_size = info["tick_size"]
@@ -146,7 +202,6 @@ def open_position(client: BybitClient, pm: PositionManager,
 
         current_price = client.get_last_price(symbol)
 
-        # Miktar hesaplama
         notional = STAKE_USDT * config.LEVERAGE
         raw_qty = notional / current_price
         qty = BybitClient.round_step(raw_qty, qty_step)
@@ -156,60 +211,27 @@ def open_position(client: BybitClient, pm: PositionManager,
                 f"Hesaplanan miktar ({qty}) minimum altında ({min_qty})")
             return
 
-        # Limit emir retry döngüsü
-        filled_order_id = None
-        for attempt in range(1, config.LIMIT_ORDER_MAX_RETRIES + 1):
-            try:
-                current_price = client.get_last_price(symbol)
-                # Hızlı dolması için 1 tick agresif fiyat
-                if side == "Buy":
-                    limit_price = current_price + tick_size
-                else:
-                    limit_price = current_price - tick_size
-                limit_price = BybitClient.round_tick(limit_price, tick_size)
+        # Limit emir döngüsü (max 20 deneme, market YOK)
+        try:
+            filled_order_id = try_fill_limit(
+                client, symbol, side, qty, tick_size, reduce_only=False
+            )
+        except Exception as e:
+            msg = str(e)
+            if "110007" in msg:
+                tg.send_entry_failed(symbol, side, "Yetersiz bakiye")
+                return
+            if "110013" in msg:
+                tg.send_entry_failed(symbol, side, f"Kaldıraç {config.LEVERAGE}x desteklenmiyor")
+                return
+            tg.send_entry_failed(symbol, side, str(e)[:200])
+            return
 
-                order_id = client.place_limit_order(
-                    symbol=symbol, side=side, qty=qty, price=limit_price,
-                )
-
-                # 5 saniye bekle
-                time.sleep(config.LIMIT_ORDER_TIMEOUT)
-
-                # Status kontrolü
-                status = client.get_order_status(symbol, order_id)
-                if status == "Filled":
-                    filled_order_id = order_id
-                    print(f"[LIMIT-FILL] {symbol} attempt {attempt} @ {limit_price}")
-                    break
-
-                # Filled değilse iptal et
-                client.cancel_order(symbol, order_id)
-                print(f"[LIMIT-RETRY] {symbol} attempt {attempt} status={status}")
-
-            except Exception as e:
-                msg = str(e)
-                if "110007" in msg:
-                    tg.send_entry_failed(symbol, side, "Yetersiz bakiye")
-                    return
-                if "110013" in msg:
-                    tg.send_entry_failed(symbol, side, f"Kaldıraç {config.LEVERAGE}x desteklenmiyor")
-                    return
-                print(f"[ERR] limit attempt {attempt} {symbol}: {e}")
-
-        # Limit emirler doldurmadıysa market
         if not filled_order_id:
-            try:
-                print(f"[MARKET] {symbol} fallback")
-                client.place_market_order(symbol=symbol, side=side, qty=qty)
-            except Exception as e:
-                msg = str(e)
-                if "110007" in msg:
-                    tg.send_entry_failed(symbol, side, "Yetersiz bakiye")
-                    return
-                if "110013" in msg:
-                    tg.send_entry_failed(symbol, side, f"Kaldıraç {config.LEVERAGE}x desteklenmiyor")
-                    return
-                raise
+            tg.send_entry_failed(symbol, side,
+                f"{config.LIMIT_ORDER_MAX_RETRIES} denemede limit emir dolmadı, sinyal atlandı")
+            print(f"[OPEN-SKIP] {symbol} {side} {config.LIMIT_ORDER_MAX_RETRIES} denemede dolmadı")
+            return
 
         # Pozisyon onaylama
         time.sleep(1.5)
@@ -264,11 +286,14 @@ def open_position(client: BybitClient, pm: PositionManager,
 
 
 # ============================================================
-# POZISYON KAPATMA
+# POZISYON KAPATMA - Sadece limit emir reduce-only, 20 deneme, market YOK
 # ============================================================
 def close_position(client: BybitClient, pm: PositionManager,
                    symbol: str, reason: str) -> None:
-    """Mevcut pozisyonu reduce-only market ile kapat."""
+    """
+    Pozisyonu reduce-only limit emir ile kapatmaya çalışır.
+    20 denemede dolmazsa pozisyon kapanmaz, bir sonraki taramada tekrar denenir.
+    """
     global SESSION_PNL, RECENT_TRADES
 
     pos = pm.get(symbol)
@@ -278,7 +303,7 @@ def close_position(client: BybitClient, pm: PositionManager,
     try:
         ex_pos = client.get_position(symbol)
         if ex_pos is None:
-            # Zaten kapalı (borsa SL tetiklemiş olabilir)
+            # Borsada pozisyon yok (SL tetiklenmiş olabilir)
             exit_price, pnl = client.get_closed_pnl(symbol)
             if exit_price is None or exit_price == 0:
                 exit_price = pos.entry_price
@@ -288,8 +313,27 @@ def close_position(client: BybitClient, pm: PositionManager,
             return
 
         actual_qty = float(ex_pos.get("size", pos.qty) or pos.qty)
-        client.close_position(symbol, pos.side, actual_qty)
 
+        # Kapatma yönü ters
+        close_side = "Sell" if pos.side == "Buy" else "Buy"
+
+        # Tick size al
+        info = client.get_instrument_info(symbol)
+        tick_size = info["tick_size"]
+
+        # Limit emir döngüsü (max 20 deneme, reduce-only, market YOK)
+        filled_order_id = try_fill_limit(
+            client, symbol, close_side, actual_qty, tick_size, reduce_only=True
+        )
+
+        if not filled_order_id:
+            # 20 denemede dolmadı, pozisyon hala açık
+            # Bir sonraki taramada tekrar denenecek
+            print(f"[CLOSE-RETRY] {symbol} {config.LIMIT_ORDER_MAX_RETRIES} denemede dolmadı, "
+                  f"sonraki taramada tekrar denenecek (reason={reason})")
+            return
+
+        # Kapanış başarılı
         time.sleep(1.2)
         exit_price, pnl = client.get_closed_pnl(symbol)
         if exit_price is None or exit_price == 0:
@@ -331,20 +375,14 @@ def _send_exit_and_record(pos: Position, exit_price: float, pnl: float,
 # ANA TARAMA - her 30 saniyede
 # ============================================================
 def scan_tick(client: BybitClient, pm: PositionManager) -> dict:
-    """
-    Tüm aktif coinleri tara.
-    Returns scan_summary: {"long": [...], "short": [...], "none": [...]}
-    """
     scan_summary = {"long": [], "short": [], "none": []}
 
     for symbol in ACTIVE_SYMBOLS:
         try:
-            # Klines/tüneller cache'ten veya yenile
             tunnels = refresh_tunnels(client, symbol)
             if tunnels is None:
                 continue
 
-            # Canlı fiyat
             try:
                 curr_price = client.get_last_price(symbol)
             except Exception as e:
@@ -366,7 +404,6 @@ def scan_tick(client: BybitClient, pm: PositionManager) -> dict:
             if pm.has(symbol):
                 pos = pm.get(symbol)
                 if prev_price is not None:
-                    # Son KAPANAN mumun close fiyatı (iğne filtresi için)
                     last_closed_close = tunnels.get("last_close", curr_price)
                     if pos.side == "Buy":
                         reason = strategy.check_long_exits(
@@ -378,13 +415,11 @@ def scan_tick(client: BybitClient, pm: PositionManager) -> dict:
                         )
                     if reason:
                         close_position(client, pm, symbol, reason)
-                # Pozisyon var → giriş kontrolüne girme
                 PREVIOUS_PRICES[symbol] = curr_price
                 continue
 
             # EXTERNAL pozisyonlara dokunma
             if symbol in EXTERNAL_POSITIONS:
-                # Manuel pozisyon kapanmış mı kontrol et
                 ex_pos = client.get_position(symbol)
                 if ex_pos is None:
                     EXTERNAL_POSITIONS.discard(symbol)
@@ -394,10 +429,8 @@ def scan_tick(client: BybitClient, pm: PositionManager) -> dict:
 
             # GİRİŞ KONTROLÜ
             if prev_price is not None:
-                # Slot kontrolü
                 total_active = pm.count() + len(EXTERNAL_POSITIONS)
                 if total_active >= config.MAX_POSITIONS:
-                    # Sinyal var mı? Varsa bildir
                     if strategy.detect_long_entry(prev_price, curr_price, tunnels):
                         tg.send_entry_failed(symbol, "Buy",
                             f"Maksimum {config.MAX_POSITIONS} işlem limitine ulaşıldı")
@@ -411,7 +444,7 @@ def scan_tick(client: BybitClient, pm: PositionManager) -> dict:
                         open_position(client, pm, symbol, "Sell", tunnels)
 
             PREVIOUS_PRICES[symbol] = curr_price
-            time.sleep(0.1)  # rate limit
+            time.sleep(0.1)
 
         except Exception as e:
             tb = traceback.format_exc()
@@ -426,7 +459,6 @@ def scan_tick(client: BybitClient, pm: PositionManager) -> dict:
 # ============================================================
 def send_status_report(client: BybitClient, pm: PositionManager,
                        scan_summary: dict) -> None:
-    """5dk genel rapor."""
     global RECENT_TRADES, SESSION_PNL
 
     try:
@@ -436,7 +468,6 @@ def send_status_report(client: BybitClient, pm: PositionManager,
 
     free = balance - STAKE_USDT
 
-    # Açık pozisyonların güncel durumu
     open_pos_list = []
     for symbol, pos in pm.all().items():
         try:
@@ -458,11 +489,9 @@ def send_status_report(client: BybitClient, pm: PositionManager,
             "notional": pos.notional_usdt, "status": status,
         })
 
-    # Son 5dk işlemleri (5dk öncesinden eski olanları temizle)
     cutoff = now_ts() - config.REPORT_INTERVAL
     recent = [t for t in RECENT_TRADES if t["ts"] >= cutoff]
 
-    # Seans yüzdesi
     session_pnl_pct = (SESSION_PNL / SESSION_START_BALANCE * 100) if SESSION_START_BALANCE else 0
 
     tg.send_status_report(
@@ -472,7 +501,6 @@ def send_status_report(client: BybitClient, pm: PositionManager,
         session_pnl=SESSION_PNL, session_pnl_pct=session_pnl_pct,
     )
 
-    # Recent trades listesini temizle (rapor için kullandık)
     RECENT_TRADES = recent
 
 
@@ -480,7 +508,6 @@ def send_status_report(client: BybitClient, pm: PositionManager,
 # MEVCUT POZİSYONLARI GERİ YÜKLE
 # ============================================================
 def restore_open_positions(client: BybitClient) -> None:
-    """Bot başlangıcında borsadaki açık pozisyonları external olarak işaretle."""
     try:
         open_positions = client.get_open_positions()
     except Exception as e:
@@ -521,12 +548,10 @@ def restore_open_positions(client: BybitClient) -> None:
 # STARTUP
 # ============================================================
 def startup(client: BybitClient) -> None:
-    """Bot başlangıç sequence."""
     global STAKE_USDT, ACTIVE_SYMBOLS, SESSION_START_BALANCE
 
     config.validate_config()
 
-    # Bakiye okuma
     balance = client.get_total_balance_usdt()
     if balance <= 0:
         raise RuntimeError(f"Bakiye sıfır veya negatif: {balance}")
@@ -536,7 +561,6 @@ def startup(client: BybitClient) -> None:
 
     print(f"[START] balance={balance:.2f} stake={STAKE_USDT:.2f}")
 
-    # 50x kaldıraç kontrolü
     active, skipped = check_leverage_support(client)
     ACTIVE_SYMBOLS.clear()
     ACTIVE_SYMBOLS.extend(active)
@@ -569,13 +593,11 @@ def main():
             pass
         return
 
-    # Mevcut açık pozisyonları external olarak işaretle
     try:
         restore_open_positions(client)
     except Exception as e:
         print(f"[ERR] restore: {e}")
 
-    # Son scan_summary'i sakla (rapor için)
     last_scan_summary: dict = {"long": [], "short": [], "none": []}
     last_report_time = now_ts()
     last_scan_time = 0.0
@@ -585,12 +607,10 @@ def main():
         try:
             now = now_ts()
 
-            # Her 30 saniyede tarama
             if now - last_scan_time >= config.SCAN_INTERVAL:
                 last_scan_summary = scan_tick(client, pm)
                 last_scan_time = now
 
-            # Her 5 dakikada rapor
             if now - last_report_time >= config.REPORT_INTERVAL:
                 try:
                     send_status_report(client, pm, last_scan_summary)

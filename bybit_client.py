@@ -157,7 +157,8 @@ class BybitClient:
     # ORDERS
     # ============================================================
     def place_limit_order(self, symbol: str, side: str, qty: float, price: float,
-                          stop_loss_price: Optional[float] = None) -> str:
+                          stop_loss_price: Optional[float] = None,
+                          reduce_only: bool = False) -> str:
         """Place a limit order. Returns orderId."""
         params = {
             "category": config.CATEGORY,
@@ -167,7 +168,7 @@ class BybitClient:
             "qty": str(qty),
             "price": str(price),
             "timeInForce": "GTC",
-            "reduceOnly": False,
+            "reduceOnly": reduce_only,
         }
         if stop_loss_price is not None:
             params["stopLoss"] = str(stop_loss_price)

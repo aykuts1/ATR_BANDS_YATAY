@@ -1,17 +1,25 @@
 """
 Strateji - Sinyal üretimi ve çıkış mantığı.
 
-GIRIS:
+GIRIS (2 adımlı):
+- LONG:
+  1. ARM: Fiyat EMA21 alt çizgisinin altına iner (curr_price < EMA21 LOW)
+  2. TRIGGER: Fiyat EMA21 CLOSE'u yukarı keser → LONG aç
+- SHORT:
+  1. ARM: Fiyat EMA21 üst çizgisinin üstüne çıkar (curr_price > EMA21 HIGH)
+  2. TRIGGER: Fiyat EMA21 CLOSE'u aşağı keser → SHORT aç
+
+FILTRELER:
 - LONG: EMA21 tüneli EMA100 üstünde (EMA21_low > EMA100_high)
-        + EMA21 close yönü yukarı (close > 10mum ortalaması - tolerans)
-        + Fiyat EMA21 alt çizgisini aşağıdan yukarıya keser
 - SHORT: EMA21 tüneli EMA100 altında (EMA21_high < EMA100_low)
-         + EMA21 close yönü aşağı (close < 10mum ortalaması + tolerans)
-         + Fiyat EMA21 üst çizgisini yukarıdan aşağıya keser
+
+ARMED SIFIRLAMA:
+- Pozisyon açılınca
+- Tünel filtresi bozulunca
+- 2 saat geçince (ARMED_TIMEOUT_SECONDS)
 
 CIKIS:
-1. Normal: Hedef çizgi MUM KAPANISINDA EMA21_high (long) üstüne çıktı,
-           sonra canlı fiyat EMA21_CLOSE'u aşağı kesti
+1. Normal: Hedef çizgi MUM KAPANIŞINDA geçildi, sonra fiyat EMA21 CLOSE'u ters yönde kesti
 2. Emniyet Kemeri: Fiyat EMA100 ters çizgisini kesti
 3. Chandelier Exit: Kar %0.5 sonrası en iyi fiyattan %0.5 geri dönüş
 """
@@ -20,7 +28,7 @@ import config
 
 
 # ============================================================
-# FILTRE 1 - EMA21 tüneli EMA100 dışında mı?
+# FILTRE - EMA21 tüneli EMA100 dışında mı?
 # ============================================================
 def is_long_tunnel_ok(t: dict) -> bool:
     """EMA21 tüneli tamamen EMA100 üstünde mi?"""
@@ -28,83 +36,71 @@ def is_long_tunnel_ok(t: dict) -> bool:
 
 
 def is_short_tunnel_ok(t: dict) -> bool:
-    """EMA21 tüneli tamamen EMA100 altında mi?"""
+    """EMA21 tüneli tamamen EMA100 altında mı?"""
     return t["ema_signal_high"] < t["ema_tunnel_low"]
-
-
-# ============================================================
-# FILTRE 2 - EMA21 yön kontrolü (close vs 10 mum ortalaması)
-# ============================================================
-def is_long_direction_ok(t: dict) -> bool:
-    """
-    LONG yönü uygun mu?
-    EMA21 close şu anki değeri, son 10 mum ortalamasının
-    %0.05 tolerans altına düşmemeli (hafif aşağı bile olsa geçer).
-    """
-    sc = t["ema_signal_close"]
-    sc_avg = t["ema_signal_close_avg"]
-    if sc_avg == 0:
-        return False
-    diff_pct = (sc - sc_avg) / sc_avg
-    return diff_pct > -config.EMA_DIRECTION_TOLERANCE
-
-
-def is_short_direction_ok(t: dict) -> bool:
-    """
-    SHORT yönü uygun mu?
-    EMA21 close şu anki değeri, son 10 mum ortalamasının
-    %0.05 tolerans üstüne çıkmamalı (hafif yukarı bile olsa geçer).
-    """
-    sc = t["ema_signal_close"]
-    sc_avg = t["ema_signal_close_avg"]
-    if sc_avg == 0:
-        return False
-    diff_pct = (sc - sc_avg) / sc_avg
-    return diff_pct < config.EMA_DIRECTION_TOLERANCE
 
 
 # ============================================================
 # FILTRE STATUS (raporlama için)
 # ============================================================
 def filter_status(t: dict) -> str:
-    """Returns 'LONG', 'SHORT', or 'NONE' based on tunnel + direction."""
-    if is_long_tunnel_ok(t) and is_long_direction_ok(t):
+    """Returns 'LONG', 'SHORT', or 'NONE' based on tunnel."""
+    if is_long_tunnel_ok(t):
         return "LONG"
-    if is_short_tunnel_ok(t) and is_short_direction_ok(t):
+    if is_short_tunnel_ok(t):
         return "SHORT"
     return "NONE"
 
 
 # ============================================================
-# GIRIS DETEKSIYON - Fiyat EMA21 çizgisini kesti mi?
+# ARM KONTROLÜ - Adım 1: Fiyat sınır çizgisini geçti mi?
 # ============================================================
-def detect_long_entry(prev_price: float, curr_price: float, t: dict) -> bool:
+def should_arm_long(curr_price: float, t: dict) -> bool:
+    """
+    LONG arm koşulu: fiyat EMA21 alt çizgisinin altına indi.
+    (Sadece tünel filtresi LONG ise anlamlıdır.)
+    """
+    return curr_price < t["ema_signal_low"]
+
+
+def should_arm_short(curr_price: float, t: dict) -> bool:
+    """
+    SHORT arm koşulu: fiyat EMA21 üst çizgisinin üstüne çıktı.
+    (Sadece tünel filtresi SHORT ise anlamlıdır.)
+    """
+    return curr_price > t["ema_signal_high"]
+
+
+# ============================================================
+# GIRIS TETIK - Adım 2: Armed durumda EMA21 CLOSE'u kesti mi?
+# ============================================================
+def detect_long_entry(prev_price: float, curr_price: float, t: dict, is_armed: bool) -> bool:
     """
     LONG girişi:
-    - Filtre 1: EMA21 EMA100 üstünde
-    - Filtre 2: EMA21 close yönü yukarı
-    - Tetikleyici: Fiyat EMA21 alt çizgisini aşağıdan yukarıya kesti
+    - Filtre: EMA21 tüneli EMA100 üstünde
+    - Armed: Fiyat daha önce EMA21 LOW altına indi
+    - Tetik: Fiyat EMA21 CLOSE'u aşağıdan yukarıya kesti
     """
     if not is_long_tunnel_ok(t):
         return False
-    if not is_long_direction_ok(t):
+    if not is_armed:
         return False
-    line = t["ema_signal_low"]
+    line = t["ema_signal_close"]
     return prev_price <= line and curr_price > line
 
 
-def detect_short_entry(prev_price: float, curr_price: float, t: dict) -> bool:
+def detect_short_entry(prev_price: float, curr_price: float, t: dict, is_armed: bool) -> bool:
     """
     SHORT girişi:
-    - Filtre 1: EMA21 EMA100 altında
-    - Filtre 2: EMA21 close yönü aşağı
-    - Tetikleyici: Fiyat EMA21 üst çizgisini yukarıdan aşağıya kesti
+    - Filtre: EMA21 tüneli EMA100 altında
+    - Armed: Fiyat daha önce EMA21 HIGH üstüne çıktı
+    - Tetik: Fiyat EMA21 CLOSE'u yukarıdan aşağıya kesti
     """
     if not is_short_tunnel_ok(t):
         return False
-    if not is_short_direction_ok(t):
+    if not is_armed:
         return False
-    line = t["ema_signal_high"]
+    line = t["ema_signal_close"]
     return prev_price >= line and curr_price < line
 
 
@@ -116,16 +112,15 @@ def check_long_exits(pos, prev_price: float, curr_price: float,
     """
     LONG pozisyon için çıkış kontrolü.
     Returns exit reason string or None.
-
     last_closed_close: Son KAPANAN mumun close değeri (iğne filtresi için).
     """
     # En iyi fiyatı güncelle (LONG için en yüksek)
     if pos.best_price is None or curr_price > pos.best_price:
         pos.best_price = curr_price
 
-    target_high_line = t["ema_signal_high"]   # EMA21 üst (geçilmesi gereken)
-    target_close_line = t["ema_signal_close"] # EMA21 close (kesilince çıkış)
-    safety_line = t["ema_tunnel_high"]        # EMA100 üst (emniyet kemeri)
+    target_high_line = t["ema_signal_high"]      # EMA21 üst (geçilmesi gereken)
+    target_close_line = t["ema_signal_close"]    # EMA21 close (kesilince çıkış)
+    safety_line = t["ema_tunnel_high"]           # EMA100 üst (emniyet kemeri)
 
     # 1. NORMAL CIKIS
     # Step 1: Hedef üst çizgi MUM KAPANISINDA geçildi mi? (iğneleri yoksay)
@@ -157,16 +152,15 @@ def check_short_exits(pos, prev_price: float, curr_price: float,
     """
     SHORT pozisyon için çıkış kontrolü.
     Returns exit reason string or None.
-
     last_closed_close: Son KAPANAN mumun close değeri (iğne filtresi için).
     """
     # En iyi fiyatı güncelle (SHORT için en düşük)
     if pos.best_price is None or curr_price < pos.best_price:
         pos.best_price = curr_price
 
-    target_low_line = t["ema_signal_low"]     # EMA21 alt (geçilmesi gereken)
-    target_close_line = t["ema_signal_close"] # EMA21 close (kesilince çıkış)
-    safety_line = t["ema_tunnel_low"]         # EMA100 alt (emniyet kemeri)
+    target_low_line = t["ema_signal_low"]        # EMA21 alt (geçilmesi gereken)
+    target_close_line = t["ema_signal_close"]    # EMA21 close (kesilince çıkış)
+    safety_line = t["ema_tunnel_low"]            # EMA100 alt (emniyet kemeri)
 
     # 1. NORMAL CIKIS
     # Step 1: Hedef alt çizgi MUM KAPANISINDA geçildi mi? (iğneleri yoksay)

@@ -9,9 +9,9 @@ Her 30 saniyede tarama yapar:
 
 EMIR MANTIGI:
 - Yalnızca limit emir kullanılır. Market emir KULLANILMAZ.
-- Giriş: her saniye 1 tick agresif limit emir, max 20 deneme.
+- Giriş: her saniye 1 tick pasif (maker) limit emir, max 20 deneme.
         20 denemede dolmazsa sinyal atlanır.
-- Çıkış: her saniye 1 tick agresif limit emir (reduce-only), max 20 deneme.
+- Çıkış: her saniye 1 tick pasif (maker) limit emir (reduce-only), max 20 deneme.
         20 denemede dolmazsa bir sonraki taramada tekrar denenir.
 """
 import time
@@ -60,11 +60,15 @@ def compute_initial_sl(side: str, entry_price: float) -> float:
 
 
 def compute_aggressive_limit_price(side: str, current_price: float, tick_size: float) -> float:
-    """Buy → price + 1 tick, Sell → price - 1 tick. Returns tick-rounded price."""
+    """
+    Pasif (maker) limit fiyat hesabı - düşük komisyon için.
+    Buy → price - 1 tick (bid tarafına, satıcılar gelir),
+    Sell → price + 1 tick (ask tarafına, alıcılar gelir).
+    """
     if side == "Buy":
-        raw = current_price + tick_size
-    else:
         raw = current_price - tick_size
+    else:
+        raw = current_price + tick_size
     return BybitClient.round_tick(raw, tick_size)
 
 
@@ -74,7 +78,7 @@ def compute_aggressive_limit_price(side: str, current_price: float, tick_size: f
 def try_fill_limit(client: BybitClient, symbol: str, side: str, qty: float,
                    tick_size: float, reduce_only: bool = False) -> Optional[str]:
     """
-    Her saniye yeni fiyatla 1 tick agresif limit emir verir.
+    Her saniye yeni fiyatla 1 tick pasif (maker) limit emir verir.
     Max LIMIT_ORDER_MAX_RETRIES (20) deneme.
     Doldurursa order_id döner, dolduramazsa None döner.
 
@@ -90,7 +94,7 @@ def try_fill_limit(client: BybitClient, symbol: str, side: str, qty: float,
                 reduce_only=reduce_only,
             )
 
-            # 1 saniye bekle
+            # Bekleme süresi (config)
             time.sleep(config.LIMIT_ORDER_RETRY_INTERVAL)
 
             status = client.get_order_status(symbol, order_id)

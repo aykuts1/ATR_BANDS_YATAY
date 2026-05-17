@@ -159,7 +159,12 @@ class BybitClient:
     def place_limit_order(self, symbol: str, side: str, qty: float, price: float,
                           stop_loss_price: Optional[float] = None,
                           reduce_only: bool = False) -> str:
-        """Place a limit order. Returns orderId."""
+        """
+        Place a Post-Only limit order. Returns orderId.
+
+        PostOnly: emir kesinlikle MAKER olarak işlenir.
+        Eğer taker olacaksa borsa emri otomatik iptal eder (komisyon yok).
+        """
         params = {
             "category": config.CATEGORY,
             "symbol": symbol,
@@ -167,7 +172,7 @@ class BybitClient:
             "orderType": "Limit",
             "qty": str(qty),
             "price": str(price),
-            "timeInForce": "GTC",
+            "timeInForce": "PostOnly",
             "reduceOnly": reduce_only,
         }
         if stop_loss_price is not None:

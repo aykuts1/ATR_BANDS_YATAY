@@ -8,7 +8,8 @@ GIRIS:
          + Fiyat EMA21 üst çizgisini yukarıdan aşağıya keser
 
 CIKIS:
-1. Normal: Fiyat hedef çizgiyi geçti, sonra ters yönde kesti
+1. Normal: Hedef çizgi MUM KAPANISINDA geçildi (iğne sayılmaz),
+           sonra canlı fiyat hedef çizgiyi ters yönde kesti
 2. Emniyet Kemeri: Fiyat EMA100 ters çizgisini kesti
 3. Chandelier Exit: Kar %0.5 sonrası en iyi fiyattan %0.5 geri dönüş
 """
@@ -68,11 +69,14 @@ def detect_short_entry(prev_price: float, curr_price: float, t: dict) -> bool:
 # ============================================================
 # CIKIS DETEKSIYON
 # ============================================================
-def check_long_exits(pos, prev_price: float, curr_price: float, t: dict) -> Optional[str]:
+def check_long_exits(pos, prev_price: float, curr_price: float,
+                     last_closed_close: float, t: dict) -> Optional[str]:
     """
     LONG pozisyon için çıkış kontrolü.
     Returns exit reason string or None.
     Mutates pos.best_price, pos.ce_active, pos.crossed_target.
+
+    last_closed_close: Son KAPANAN mumun close değeri (iğne filtresi için).
     """
     # En iyi fiyatı güncelle (LONG için en yüksek)
     if pos.best_price is None or curr_price > pos.best_price:
@@ -81,13 +85,13 @@ def check_long_exits(pos, prev_price: float, curr_price: float, t: dict) -> Opti
     target_line = t["ema_signal_high"]   # EMA21 üst çizgi (hedef)
     safety_line = t["ema_tunnel_high"]   # EMA100 üst çizgi (emniyet kemeri)
 
-    # 1. NORMAL CIKIS - hedef çizgi geçildi, sonra ters yönde kesildi
+    # 1. NORMAL CIKIS
+    # Step 1: Hedef çizgi MUM KAPANISINDA geçildi mi? (iğneleri yoksay)
     if not pos.crossed_target:
-        # Hedef çizgi aşağıdan yukarıya geçildi mi?
-        if prev_price <= target_line and curr_price > target_line:
+        if last_closed_close > target_line:
             pos.crossed_target = True
     else:
-        # Hedef çizgi yukarıdan aşağıya kesildi mi? → Normal çıkış
+        # Step 2: Hedef çizgi canlı fiyatta yukarıdan aşağıya kesildi mi?
         if prev_price >= target_line and curr_price < target_line:
             return "Normal Çıkış"
 
@@ -106,11 +110,14 @@ def check_long_exits(pos, prev_price: float, curr_price: float, t: dict) -> Opti
     return None
 
 
-def check_short_exits(pos, prev_price: float, curr_price: float, t: dict) -> Optional[str]:
+def check_short_exits(pos, prev_price: float, curr_price: float,
+                      last_closed_close: float, t: dict) -> Optional[str]:
     """
     SHORT pozisyon için çıkış kontrolü.
     Returns exit reason string or None.
     Mutates pos.best_price, pos.ce_active, pos.crossed_target.
+
+    last_closed_close: Son KAPANAN mumun close değeri (iğne filtresi için).
     """
     # En iyi fiyatı güncelle (SHORT için en düşük)
     if pos.best_price is None or curr_price < pos.best_price:
@@ -119,13 +126,13 @@ def check_short_exits(pos, prev_price: float, curr_price: float, t: dict) -> Opt
     target_line = t["ema_signal_low"]    # EMA21 alt çizgi (hedef)
     safety_line = t["ema_tunnel_low"]    # EMA100 alt çizgi (emniyet kemeri)
 
-    # 1. NORMAL CIKIS - hedef çizgi geçildi, sonra ters yönde kesildi
+    # 1. NORMAL CIKIS
+    # Step 1: Hedef çizgi MUM KAPANISINDA geçildi mi? (iğneleri yoksay)
     if not pos.crossed_target:
-        # Hedef çizgi yukarıdan aşağıya geçildi mi?
-        if prev_price >= target_line and curr_price < target_line:
+        if last_closed_close < target_line:
             pos.crossed_target = True
     else:
-        # Hedef çizgi aşağıdan yukarıya kesildi mi? → Normal çıkış
+        # Step 2: Hedef çizgi canlı fiyatta aşağıdan yukarıya kesildi mi?
         if prev_price <= target_line and curr_price > target_line:
             return "Normal Çıkış"
 

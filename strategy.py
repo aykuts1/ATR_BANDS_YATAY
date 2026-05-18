@@ -20,7 +20,7 @@ ARMED SIFIRLAMA:
 
 CIKIS:
 1. Normal: Hedef çizgi MUM KAPANIŞINDA geçildi, sonra fiyat EMA21 CLOSE'u ters yönde kesti
-2. Emniyet Kemeri: Fiyat EMA100 ters çizgisini kesti
+2. Emniyet Kemeri: Fiyat EMA100 ters çizgisini ketti
 3. Chandelier Exit (ATR): Kar 1 ATR'yi geçince aktif, en iyi fiyattan 1 ATR geri dönüş → çıkış
 """
 from typing import Optional
@@ -31,12 +31,10 @@ import config
 # FILTRE - EMA21 tüneli EMA100 dışında mı?
 # ============================================================
 def is_long_tunnel_ok(t: dict) -> bool:
-    """EMA21 tüneli tamamen EMA100 üstünde mi?"""
     return t["ema_signal_low"] > t["ema_tunnel_high"]
 
 
 def is_short_tunnel_ok(t: dict) -> bool:
-    """EMA21 tüneli tamamen EMA100 altında mı?"""
     return t["ema_signal_high"] < t["ema_tunnel_low"]
 
 
@@ -44,7 +42,6 @@ def is_short_tunnel_ok(t: dict) -> bool:
 # FILTRE STATUS (raporlama için)
 # ============================================================
 def filter_status(t: dict) -> str:
-    """Returns 'LONG', 'SHORT', or 'NONE' based on tunnel."""
     if is_long_tunnel_ok(t):
         return "LONG"
     if is_short_tunnel_ok(t):
@@ -56,18 +53,10 @@ def filter_status(t: dict) -> str:
 # ARM KONTROLÜ - Adım 1: Fiyat sınır çizgisini geçti mi?
 # ============================================================
 def should_arm_long(curr_price: float, t: dict) -> bool:
-    """
-    LONG arm koşulu: fiyat EMA21 alt çizgisinin altına indi.
-    (Sadece tünel filtresi LONG ise anlamlıdır.)
-    """
     return curr_price < t["ema_signal_low"]
 
 
 def should_arm_short(curr_price: float, t: dict) -> bool:
-    """
-    SHORT arm koşulu: fiyat EMA21 üst çizgisinin üstüne çıktı.
-    (Sadece tünel filtresi SHORT ise anlamlıdır.)
-    """
     return curr_price > t["ema_signal_high"]
 
 
@@ -75,12 +64,6 @@ def should_arm_short(curr_price: float, t: dict) -> bool:
 # GIRIS TETIK - Adım 2: Armed durumda EMA21 CLOSE'u kesti mi?
 # ============================================================
 def detect_long_entry(prev_price: float, curr_price: float, t: dict, is_armed: bool) -> bool:
-    """
-    LONG girişi:
-    - Filtre: EMA21 tüneli EMA100 üstünde
-    - Armed: Fiyat daha önce EMA21 LOW altına indi
-    - Tetik: Fiyat EMA21 CLOSE'u aşağıdan yukarıya kesti
-    """
     if not is_long_tunnel_ok(t):
         return False
     if not is_armed:
@@ -90,12 +73,6 @@ def detect_long_entry(prev_price: float, curr_price: float, t: dict, is_armed: b
 
 
 def detect_short_entry(prev_price: float, curr_price: float, t: dict, is_armed: bool) -> bool:
-    """
-    SHORT girişi:
-    - Filtre: EMA21 tüneli EMA100 altında
-    - Armed: Fiyat daha önce EMA21 HIGH üstüne çıktı
-    - Tetik: Fiyat EMA21 CLOSE'u yukarıdan aşağıya kesti
-    """
     if not is_short_tunnel_ok(t):
         return False
     if not is_armed:
@@ -109,11 +86,75 @@ def detect_short_entry(prev_price: float, curr_price: float, t: dict, is_armed: 
 # ============================================================
 def check_long_exits(pos, prev_price: float, curr_price: float,
                      last_closed_close: float, t: dict) -> Optional[str]:
-    """
-    LONG pozisyon için çıkış kontrolü.
-    Returns exit reason string or None.
-    last_closed_close: Son KAPANAN mumun close değeri (iğne filtresi için).
-    """
-    # En iyi fiyatı güncelle (LONG için en yüksek)
     if pos.best_price is None or curr_price > pos.best_price:
         pos.best_price = curr_price
+
+    target_high_line = t["ema_signal_high"]
+    target_close_line = t["ema_signal_close"]
+    safety_line = t["ema_tunnel_high"]
+    atr_val = t["atr"]
+
+    # 1. NORMAL CIKIS
+    if not pos.crossed_target:
+        if last_closed_close > target_high_line:
+            pos.crossed_target = True
+    else:
+        if prev_price >= target_close_line and curr_price < target_close_line:
+            return "Normal Çıkış"
+
+    # 2. EMNIYET KEMERI
+    if prev_price >= safety_line and curr_price < safety_line:
+        return "Emniyet Kemeri (EMA100)"
+
+    # 3. CHANDELIER EXIT (ATR)
+    profit = curr_price - pos.entry_price
+    atr_threshold = config.CE_ATR_MULTIPLIER * atr_val
+    if profit >= atr_threshold or pos.ce_active:
+        pos.ce_active = True
+        ce_level = pos.best_price - atr_threshold
+        if curr_price <= ce_level:
+            return "Chandelier Exit (ATR)"
+
+    return None
+
+
+def check_short_exits(pos, prev_price: float, curr_price: float,
+                      last_closed_close: float, t: dict) -> Optional[str]:
+    if pos.best_price is None or curr_price < pos.best_price:
+        pos.best_price = curr_price
+
+    target_low_line = t["ema_signal_low"]
+    target_close_line = t["ema_signal_close"]
+    safety_line = t["ema_tunnel_low"]
+    atr_val = t["atr"]
+
+    # 1. NORMAL CIKIS
+    if not pos.crossed_target:
+        if last_closed_close < target_low_line:
+            pos.crossed_target = True
+    else:
+        if prev_price <= target_close_line and curr_price > target_close_line:
+            return "Normal Çıkış"
+
+    # 2. EMNIYET KEMERI
+    if prev_price <= safety_line and curr_price > safety_line:
+        return "Emniyet Kemeri (EMA100)"
+
+    # 3. CHANDELIER EXIT (ATR)
+    profit = pos.entry_price - curr_price
+    atr_threshold = config.CE_ATR_MULTIPLIER * atr_val
+    if profit >= atr_threshold or pos.ce_active:
+        pos.ce_active = True
+        ce_level = pos.best_price + atr_threshold
+        if curr_price >= ce_level:
+            return "Chandelier Exit (ATR)"
+
+    return None
+
+
+def position_status(pos, curr_price: float) -> str:
+    if pos.ce_active:
+        return "🎯 CE aktif"
+    if pos.crossed_target:
+        return "✅ Hedef geçildi"
+    return "⏳ Hedef bekleniyor"

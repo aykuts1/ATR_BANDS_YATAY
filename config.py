@@ -54,7 +54,7 @@ KLINE_REFRESH_INTERVAL = 60  # Saniye - klines cache yenileme
 REPORT_INTERVAL = 300        # Saniye - her 5dk genel rapor
 # Emir parametreleri (yalnızca limit emir, market kullanılmaz)
 LIMIT_ORDER_RETRY_INTERVAL = 3   # Saniye - her saniye yeni emir
-LIMIT_ORDER_MAX_RETRIES = 20     # Max 20 deneme, dolmazsa sinyali atla
+LIMIT_ORDER_MAX_RETRIES = 50     # Max 20 deneme, dolmazsa sinyali atla
 # ============================================================
 # BYBIT API SETTINGS
 # ============================================================

@@ -18,10 +18,11 @@ ARMED SIFIRLAMA:
 - Tünel filtresi bozulunca
 - 2 saat geçince (ARMED_TIMEOUT_SECONDS)
 
-CIKIS:
-1. Normal: Hedef çizgi MUM KAPANIŞINDA geçildi, sonra fiyat EMA21 CLOSE'u ters yönde kesti
-2. Emniyet Kemeri: Fiyat EMA100 ters çizgisini ketti
-3. Chandelier Exit (ATR): Kar 1 ATR'yi geçince aktif, en iyi fiyattan 1 ATR geri dönüş → çıkış
+CIKIS (4 mekanizma, bağımsız):
+1. Take Profit: Kar %0.3'e ulaşınca direkt çıkış
+2. Normal: Hedef çizgi MUM KAPANIŞINDA geçildi, sonra fiyat EMA21 CLOSE'u ters yönde kesti
+3. Emniyet Kemeri: Fiyat EMA100 ters çizgisini kesti
+4. Chandelier Exit: Kar %0.1 sonrası en iyi fiyattan %0.05 geri dönüş
 """
 from typing import Optional
 import config
@@ -92,9 +93,13 @@ def check_long_exits(pos, prev_price: float, curr_price: float,
     target_high_line = t["ema_signal_high"]
     target_close_line = t["ema_signal_close"]
     safety_line = t["ema_tunnel_high"]
-    atr_val = t["atr"]
 
-    # 1. NORMAL CIKIS
+    # 1. TAKE PROFIT - kar %0.3'e ulaşınca direkt çıkış
+    profit_pct = (curr_price - pos.entry_price) / pos.entry_price
+    if profit_pct >= config.TAKE_PROFIT_PCT:
+        return "Take Profit (%0.3)"
+
+    # 2. NORMAL CIKIS
     if not pos.crossed_target:
         if last_closed_close > target_high_line:
             pos.crossed_target = True
@@ -102,18 +107,16 @@ def check_long_exits(pos, prev_price: float, curr_price: float,
         if prev_price >= target_close_line and curr_price < target_close_line:
             return "Normal Çıkış"
 
-    # 2. EMNIYET KEMERI
+    # 3. EMNIYET KEMERI
     if prev_price >= safety_line and curr_price < safety_line:
         return "Emniyet Kemeri (EMA100)"
 
-    # 3. CHANDELIER EXIT (ATR)
-    profit = curr_price - pos.entry_price
-    atr_threshold = config.CE_ATR_MULTIPLIER * atr_val
-    if profit >= atr_threshold or pos.ce_active:
+    # 4. CHANDELIER EXIT - kar %0.1 sonrası en iyi fiyattan %0.05 geri dönüş
+    if profit_pct >= config.CE_ACTIVATION_PCT or pos.ce_active:
         pos.ce_active = True
-        ce_level = pos.best_price - atr_threshold
+        ce_level = pos.best_price * (1 - config.CE_TRAIL_PCT)
         if curr_price <= ce_level:
-            return "Chandelier Exit (ATR)"
+            return "Chandelier Exit (%0.05)"
 
     return None
 
@@ -126,9 +129,13 @@ def check_short_exits(pos, prev_price: float, curr_price: float,
     target_low_line = t["ema_signal_low"]
     target_close_line = t["ema_signal_close"]
     safety_line = t["ema_tunnel_low"]
-    atr_val = t["atr"]
 
-    # 1. NORMAL CIKIS
+    # 1. TAKE PROFIT - kar %0.3'e ulaşınca direkt çıkış
+    profit_pct = (pos.entry_price - curr_price) / pos.entry_price
+    if profit_pct >= config.TAKE_PROFIT_PCT:
+        return "Take Profit (%0.3)"
+
+    # 2. NORMAL CIKIS
     if not pos.crossed_target:
         if last_closed_close < target_low_line:
             pos.crossed_target = True
@@ -136,18 +143,16 @@ def check_short_exits(pos, prev_price: float, curr_price: float,
         if prev_price <= target_close_line and curr_price > target_close_line:
             return "Normal Çıkış"
 
-    # 2. EMNIYET KEMERI
+    # 3. EMNIYET KEMERI
     if prev_price <= safety_line and curr_price > safety_line:
         return "Emniyet Kemeri (EMA100)"
 
-    # 3. CHANDELIER EXIT (ATR)
-    profit = pos.entry_price - curr_price
-    atr_threshold = config.CE_ATR_MULTIPLIER * atr_val
-    if profit >= atr_threshold or pos.ce_active:
+    # 4. CHANDELIER EXIT - kar %0.1 sonrası en iyi fiyattan %0.05 geri dönüş
+    if profit_pct >= config.CE_ACTIVATION_PCT or pos.ce_active:
         pos.ce_active = True
-        ce_level = pos.best_price + atr_threshold
+        ce_level = pos.best_price * (1 + config.CE_TRAIL_PCT)
         if curr_price >= ce_level:
-            return "Chandelier Exit (ATR)"
+            return "Chandelier Exit (%0.05)"
 
     return None
 

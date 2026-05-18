@@ -32,8 +32,8 @@ else:
 # Tüneller
 EMA_TUNNEL_PERIOD = 100  # EMA100 (filtre tüneli) - high & low
 EMA_SIGNAL_PERIOD = 21   # EMA21 (sinyal tüneli) - high & low & close
-# ATR (Chandelier Exit için)
-ATR_PERIOD = 14          # ATR periyodu - CE seviyesi için
+# ATR (hesaplanıyor ama şu an çıkışlarda kullanılmıyor)
+ATR_PERIOD = 14
 # Armed state (2 adımlı giriş)
 ARMED_TIMEOUT_SECONDS = 7200  # 2 saat - armed durumu bu sürede tetiklenmezse sıfırlanır
 # Timeframe
@@ -46,15 +46,18 @@ MAX_POSITIONS = 5        # Aynı anda max 5 işlem
 MARGIN_MODE = "ISOLATED" # Isolated margin
 # Stop Loss
 INITIAL_SL_PERCENT = 0.01  # %1 fiyat hareketi (kaldıraçsız)
-# Chandelier Exit (CE) - ATR bazlı trailing stop
-CE_ATR_MULTIPLIER = 1.0   # Aktivasyon ve trail mesafesi (1 ATR)
+# Chandelier Exit (CE) - yüzde bazlı trailing stop
+CE_ACTIVATION_PCT = 0.001   # Kar %0.1'e ulaşınca CE aktif
+CE_TRAIL_PCT = 0.0005       # En iyi fiyattan %0.05 geri dönüş = çıkış
+# Take Profit
+TAKE_PROFIT_PCT = 0.003     # Kar %0.3'e ulaşınca direkt çıkış
 # Tarama ve emir zamanlamaları
 SCAN_INTERVAL = 30           # Saniye - her 30sn tarama
 KLINE_REFRESH_INTERVAL = 60  # Saniye - klines cache yenileme
 REPORT_INTERVAL = 300        # Saniye - her 5dk genel rapor
 # Emir parametreleri (yalnızca limit emir, market kullanılmaz)
 LIMIT_ORDER_RETRY_INTERVAL = 3   # Saniye - her saniye yeni emir
-LIMIT_ORDER_MAX_RETRIES = 50     # Max 20 deneme, dolmazsa sinyali atla
+LIMIT_ORDER_MAX_RETRIES = 50     # Max 50 deneme, dolmazsa sinyali atla
 # ============================================================
 # BYBIT API SETTINGS
 # ============================================================

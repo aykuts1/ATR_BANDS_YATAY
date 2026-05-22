@@ -73,12 +73,10 @@ class Config:
 
         # --- Cikis ---
         # CE1: ATR cinsinden kar esigi + chandelier takip mesafesi
-        # CE2: tetik = fiyat EMA cizgisini gecince (parametre yok), sadece trail
         # WINRATE EXIT: karsi taraf ic tamponu kar yonunde keserse (parametre yok)
         c = raw["cikis"]
         self.ce1_atr:    float = float(c["CE1_ATR"])
         self.ce1_trail:  float = float(c["CE1_TRAIL"])
-        self.ce2_trail:  float = float(c["CE2_TRAIL"])
 
         # --- Emir ---
         e = raw["emir"]

@@ -96,7 +96,6 @@ class Notifier:
             f"• Band Carpani: {cfg.band_multiplier}",
             f"• Tampon Carpani: {cfg.buffer_multiplier}",
             f"• CE1: {cfg.ce1_atr} ATR / Takip: {cfg.ce1_trail} ATR",
-            f"• CE2: EMA cross / Takip: {cfg.ce2_trail} ATR",
             f"• Winrate Exit: karsi ic tampon kesiminde (parametresiz)",
             f"• Coin Sayisi: {len(cfg.coins)}",
         ]

@@ -357,21 +357,17 @@ class Bot:
         price = self.bybit.fetch_last_price(pos.symbol)
         prev_price = pos.prev_check_price   # onceki taramadan kalma
 
-        # 2. Bant degerlerini al (dinamik BE icin disbant, EMA icin CE2 gerekli)
+        # 2. Bant degerlerini al
         bands = self._get_bands(pos.symbol)
 
-        # 3. Seviye / CE / BE guncelle
+        # 3. Seviye / CE guncelle
         new_level = update_level_and_ce(
             pos,
             price=price,
-            ema=bands.ema,
             ust_ic_tampon=bands.ust_ic_tampon,
             alt_ic_tampon=bands.alt_ic_tampon,
-            ust_disbant=bands.ust_disbant,
-            alt_disbant=bands.alt_disbant,
             ce1_atr=self.cfg.ce1_atr,
             ce1_trail=self.cfg.ce1_trail,
-            ce2_trail=self.cfg.ce2_trail,
         )
 
         if new_level is not None:
@@ -387,12 +383,13 @@ class Bot:
             pos, price, prev_price,
             ust_dis_tampon=bands.ust_dis_tampon,
             alt_dis_tampon=bands.alt_dis_tampon,
+            ust_disbant=bands.ust_disbant,
+            alt_disbant=bands.alt_disbant,
             ust_ic_tampon=bands.ust_ic_tampon,
             alt_ic_tampon=bands.alt_ic_tampon,
         )
 
         # 5. prev_check_price'i guncel taramayla guncelle
-        #    (cikis tetiklendiyse pozisyon nasilsa silinecek)
         pos.prev_check_price = price
 
         if exit_type is None:

@@ -2,9 +2,9 @@
   "_aciklama": "Tum ayarlar bu dosyadan yapilir. Degisiklikler bot yeniden baslatilinca aktif olur.",
 
   "genel": {
-    "STAKE_PERCENT":   20,
+    "STAKE_PERCENT":   10,
     "MAX_OPEN_TRADES": 10,
-    "LEVERAGE":        50,
+    "LEVERAGE":        40,
     "SL_PERCENT":      1,
     "_aciklama": "STAKE_PERCENT: bakiyenin yuzde kaci stake | MAX_OPEN_TRADES: ayni anda max acik islem | LEVERAGE: kaldirac | SL_PERCENT: borsa stop-loss yuzdesi"
   },
@@ -12,7 +12,7 @@
   "bant": {
     "EMA_PERIOD":       100,
     "ATR_PERIOD":       14,
-    "BAND_MULTIPLIER":  3,
+    "BAND_MULTIPLIER":  2.9,
     "BUFFER_MULTIPLIER": 0.3,
     "_aciklama": "EMA_PERIOD: orta cizgi | ATR_PERIOD: ATR periyodu | BAND_MULTIPLIER: disbant = EMA +/- BAND*ATR | BUFFER_MULTIPLIER: ic/dis tampon = disbant +/- BUFFER*ATR"
   },

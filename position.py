@@ -223,26 +223,26 @@ def check_exit(
         if pos.side == "SHORT" and price >= pos.ce_price:
             return "CE1 Exit"
 
-    # 3. BE Exit (BE seviyesinde, entry-tarafi disbant CROSSOVER)
+    # 3. BE Exit (BE seviyesinde, entry-tarafi disbantin disinda)
     if pos.level == LEVEL_BE:
         if pos.side == "LONG":
-            # alt_disbant asagi yonlu kesim
-            if prev_price >= alt_disbant and price < alt_disbant:
+            # alt_disbant altinda
+            if price < alt_disbant:
                 return "BE Exit"
         else:  # SHORT
-            # ust_disbant yukari yonlu kesim
-            if prev_price <= ust_disbant and price > ust_disbant:
+            # ust_disbant ustunde
+            if price > ust_disbant:
                 return "BE Exit"
 
-    # 4. Lose Exit (ENTRY seviyesinde, entry-tarafi dis tampon CROSSOVER)
+    # 4. Lose Exit (ENTRY seviyesinde, entry-tarafi dis tamponun disinda)
     if pos.level == LEVEL_ENTRY:
         if pos.side == "LONG":
-            # alt_dis_tampon asagi yonlu kesim
-            if prev_price >= alt_dis_tampon and price < alt_dis_tampon:
+            # alt_dis_tampon altinda
+            if price < alt_dis_tampon:
                 return "Lose Exit"
         else:  # SHORT
-            # ust_dis_tampon yukari yonlu kesim
-            if prev_price <= ust_dis_tampon and price > ust_dis_tampon:
+            # ust_dis_tampon ustunde
+            if price > ust_dis_tampon:
                 return "Lose Exit"
 
     return None

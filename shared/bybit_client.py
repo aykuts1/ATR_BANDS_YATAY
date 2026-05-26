@@ -183,41 +183,49 @@ class BybitClient:
     def kaldirac_ayarla(self, sembol, kaldirac):
         """
         Sembol icin kaldirac ayarlar.
-        Zaten ayarliysa hata gelirse gormezden gelir.
+        Zaten ayarliysa sessizce geri doner (Telegram bildirimi gitmez).
         """
-        def _cagri():
-            return self.client.set_leverage(
+        try:
+            sonuc = self.client.set_leverage(
                 category='linear',
                 symbol=sembol,
                 buyLeverage=str(kaldirac),
                 sellLeverage=str(kaldirac),
             )
-
-        try:
-            self._retry(f'kaldirac_ayarla({sembol})', _cagri)
+            if isinstance(sonuc, dict):
+                ret_code = sonuc.get('retCode', 0)
+                # 0 = basarili, 110043 = leverage not modified (zaten ayarli)
+                if ret_code in (0, 110043):
+                    return
+                msg = sonuc.get('retMsg', 'Bilinmeyen hata')
+                raise Exception(f"Bybit API hatasi (kod {ret_code}): {msg}")
         except Exception as e:
-            # Bybit "leverage not modified" hatasi verirse normal, yoksay
-            if 'not modified' in str(e).lower() or '110043' in str(e):
+            err = str(e).lower()
+            if '110043' in err or 'not modified' in err or 'leverage not modified' in err:
                 return
             raise
 
     def hedge_mode_ayarla(self, sembol):
         """
         Sembol icin hedge mode ayarlar (pozisyon modu = both side).
-        Zaten ayarliysa hata gelirse gormezden gelir.
+        Zaten ayarliysa sessizce geri doner (Telegram bildirimi gitmez).
         """
-        def _cagri():
-            return self.client.switch_position_mode(
+        try:
+            sonuc = self.client.switch_position_mode(
                 category='linear',
                 symbol=sembol,
-                mode=3,  # 3 = Both Side (hedge mode)
+                mode=3,
             )
-
-        try:
-            self._retry(f'hedge_mode({sembol})', _cagri)
+            if isinstance(sonuc, dict):
+                ret_code = sonuc.get('retCode', 0)
+                # 0 = basarili, 110025 = position mode not modified (zaten hedge)
+                if ret_code in (0, 110025):
+                    return
+                msg = sonuc.get('retMsg', 'Bilinmeyen hata')
+                raise Exception(f"Bybit API hatasi (kod {ret_code}): {msg}")
         except Exception as e:
-            # zaten hedge modeyse hata fırlatabilir, yoksay
-            if 'not modified' in str(e).lower() or '110025' in str(e):
+            err = str(e).lower()
+            if '110025' in err or 'not modified' in err or 'position mode is not modified' in err:
                 return
             raise
 

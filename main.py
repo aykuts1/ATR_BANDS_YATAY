@@ -18,6 +18,13 @@ import signal
 import traceback
 from datetime import datetime
 
+# Render/Docker loglari icin: print'ler aninda gozuksun
+try:
+    sys.stdout.reconfigure(line_buffering=True)
+    sys.stderr.reconfigure(line_buffering=True)
+except Exception:
+    pass
+
 # Modulleri import et
 from shared.bybit_client import BybitClient
 from shared.market_data import MarketData

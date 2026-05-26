@@ -22,13 +22,13 @@
   "_fiyat_buffer_aciklama": "Anlik fiyat buffer'inda kac fiyat tutulur (crossover icin son 3 + anlik gerekli)",
 
   "_RISK_YONETIMI": "===== RISK YONETIMI =====",
-  "stake_yuzde": 5,
+  "stake_yuzde": 4,
   "_stake_aciklama": "Baslangic bakiyesinin yuzde kaci stake olarak kullanilir (her islem icin)",
 
-  "kaldirac": 20,
+  "kaldirac": 25,
   "_kaldirac_aciklama": "Islem kaldiraci (Bybit Futures)",
 
-  "sl_yuzde": 1,
+  "sl_yuzde": 2,
   "_sl_aciklama": "Her isleme borsaya konulan stop-loss yuzdesi (emniyet kemeri)",
 
   "komisyon_yuzde": 0.01,

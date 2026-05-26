@@ -1,0 +1,116 @@
+{
+  "_BOT_GENEL": "===== BOT GENEL AYARLARI =====",
+  "timeframe": "30",
+  "_timeframe_aciklama": "Mum verisi zaman dilimi (dakika). Secenekler: 5, 15, 30, 60",
+
+  "mum_sayisi": 200,
+  "_mum_sayisi_aciklama": "API'den her cekilecek mum sayisi (EMA ve ATR icin)",
+
+  "ema_periyot": 100,
+  "_ema_periyot_aciklama": "EMA hesaplamasi icin periyot (varsayilan 100)",
+
+  "atr_periyot": 100,
+  "_atr_periyot_aciklama": "ATR son kac mumun ortalamasi olarak hesaplanir",
+
+  "mum_yenileme_saniye": 300,
+  "_mum_yenileme_aciklama": "Mum verisi kac saniyede bir yenilenir (varsayilan 300 = 5 dakika)",
+
+  "fiyat_yenileme_saniye": 5,
+  "_fiyat_yenileme_aciklama": "Anlik fiyat kac saniyede bir cekilir",
+
+  "fiyat_buffer_boyut": 6,
+  "_fiyat_buffer_aciklama": "Anlik fiyat buffer'inda kac fiyat tutulur (crossover icin son 3 + anlik gerekli)",
+
+  "_RISK_YONETIMI": "===== RISK YONETIMI =====",
+  "stake_yuzde": 5,
+  "_stake_aciklama": "Baslangic bakiyesinin yuzde kaci stake olarak kullanilir (her islem icin)",
+
+  "kaldirac": 20,
+  "_kaldirac_aciklama": "Islem kaldiraci (Bybit Futures)",
+
+  "sl_yuzde": 1,
+  "_sl_aciklama": "Her isleme borsaya konulan stop-loss yuzdesi (emniyet kemeri)",
+
+  "komisyon_yuzde": 0.01,
+  "_komisyon_aciklama": "Tek yon komisyon orani (giris+cikis = bunun 2 kati). PNL hesabinda ve cikis cizgilerinde kullanilir",
+
+  "max_pozisyon": 20,
+  "_max_pozisyon_aciklama": "Ayni anda acik olabilecek maksimum pozisyon sayisi",
+
+  "_COIN_LISTESI": "===== COIN LISTESI =====",
+  "coinler": [
+    "APTUSDT",
+    "AVAXUSDT",
+    "NEARUSDT",
+    "SUIUSDT",
+    "ADAUSDT",
+    "ATOMUSDT",
+    "TRUMPUSDT",
+    "SOLUSDT",
+    "DOTUSDT",
+    "DOGEUSDT"
+  ],
+  "_coinler_aciklama": "Islem yapilacak coin listesi (Bybit linear perpetual sembolleri)",
+
+  "_BANT_AYARLARI": "===== BANT CIZGI AYARLARI (ATR carpanlari) =====",
+  "kirmizi_dis_atr": 2.0,
+  "_kirmizi_dis_aciklama": "Kirmizi Dis Cizgi: EMA +/- bu kadar ATR",
+
+  "mavi_dis_atr": 1.9,
+  "_mavi_dis_aciklama": "Mavi Dis Cizgi: EMA +/- bu kadar ATR",
+
+  "tampon_atr": 0.6,
+  "_tampon_aciklama": "Ic ve Dis Tampon'un Dis Cizgi'ye uzakligi (ATR cinsinden)",
+
+  "mor_sari_seviye1_atr": 0.4,
+  "_mor_sari_seviye1_aciklama": "Mor/Sari Seviye 1 ve 5'in Dis Cizgi'ye uzakligi",
+
+  "mor_sari_seviye2_atr": 0.2,
+  "_mor_sari_seviye2_aciklama": "Mor/Sari Seviye 2 ve 4'un Dis Cizgi'ye uzakligi",
+
+  "kirmizi_seviye1_atr": 1.0,
+  "_kirmizi_seviye1_aciklama": "Kirmizi Seviye 1'in Kirmizi Dis Cizgi'ye uzakligi (disa dogru)",
+
+  "kirmizi_seviye2_atr": 2.0,
+  "_kirmizi_seviye2_aciklama": "Kirmizi Seviye 2'nin Kirmizi Dis Cizgi'ye uzakligi (disa dogru)",
+
+  "mavi_seviye1_atr": 1.0,
+  "_mavi_seviye1_aciklama": "Mavi Seviye 1'in Mavi Dis Cizgi'ye uzakligi (ice dogru)",
+
+  "mavi_seviye2_atr": 2.0,
+  "_mavi_seviye2_aciklama": "Mavi Seviye 2'nin Mavi Dis Cizgi'ye uzakligi (ice dogru)",
+
+  "chandelier_atr": 1.0,
+  "_chandelier_aciklama": "Chandelier stop mesafesi (Kirmizi ve Mavi ST1/ST2 seviyelerinde)",
+
+  "_TELEGRAM": "===== TELEGRAM AYARLARI =====",
+  "telegram_aktif": true,
+  "_telegram_aktif_aciklama": "Telegram bildirimleri aktif/pasif",
+
+  "rapor_15dk": true,
+  "rapor_1saat": true,
+  "rapor_8saat": true,
+  "rapor_24saat": true,
+  "_rapor_aciklama": "Hangi periyodik raporlar gonderilsin",
+
+  "_THREAD": "===== THREAD AYARLARI =====",
+  "thread_kirmizi_aktif": true,
+  "thread_mavi_aktif": true,
+  "thread_mor_aktif": true,
+  "thread_sari_aktif": true,
+  "_thread_aciklama": "Threadleri ayri ayri acip kapatabilirsiniz",
+
+  "_API_RETRY": "===== API HATA YONETIMI =====",
+  "api_max_retry": 3,
+  "_api_max_retry_aciklama": "API hatasinda kac kez tekrar denenecek",
+
+  "api_retry_bekleme_saniye": 2,
+  "_api_retry_bekleme_aciklama": "Her retry arasi bekleme suresi (saniye)",
+
+  "_BYBIT": "===== BYBIT AYARLARI =====",
+  "testnet": false,
+  "_testnet_aciklama": "true = Bybit testnet, false = gercek hesap",
+
+  "hedge_mode": true,
+  "_hedge_aciklama": "Hedge modu (ayni anda long+short pozisyon icin true olmali)"
+}
